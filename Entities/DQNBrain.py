@@ -10,13 +10,13 @@ import numpy as np
 from Brain import Brain
 
 # Hyperparameters
-gamma = 0.98
+gamma = 0.95
 buffer_limit = 50000
 batch_size = 32
 
 
 class DQNBrain(Brain):
-    def __init__(self, input_dim=3271, output_dim=4, learning_rate=0.001, train_freq=20,
+    def __init__(self, input_dim=200, output_dim=9, learning_rate=0.001, train_freq=20,
                  load_model=False, training=True):
         super().__init__(input_dim, output_dim, "DQN")
         self.agent = Qnet(input_dim)
@@ -33,11 +33,16 @@ class DQNBrain(Brain):
             self.epsilon = 0
 
         if load_model:
-            self.agent.load_state_dict(torch.load(load_model))
+            checkpoint = torch.load(load_model)
+            self.agent.load_state_dict(checkpoint['model_state_dict'])
             self.agent.eval()
 
-    def act(self, state, n_epi):
+            self.target.load_state_dict(checkpoint['model_state_dict'])
+            self.target.eval()
 
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    def act(self, state, n_epi):
         if self.training:
             if n_epi % 30 == 0:
                 self.epsilon = max(0.1, self.epsilon / ( 1 + self.decay_rate * n_epi))
@@ -56,7 +61,7 @@ class DQNBrain(Brain):
             train(self.agent, self.target, self.memory, self.optimizer)
         self.target.load_state_dict(self.agent.state_dict())
 
-    def learn(self, age, dead, action, state, reward, state_prime, done):
+    def learn(self, age, dead, action, state, reward, state_prime, done, n_epi):
         self.memorize(state, action, reward, state_prime, done)
 
         if age % self.train_freq == 0 or dead:

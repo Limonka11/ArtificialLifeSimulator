@@ -13,6 +13,7 @@ class EntityTypes(IntEnum):
     poison = 2
     agent = 3
     water = 4
+    corpse = 5
 
 class Actions(IntEnum):
     up = 0
@@ -20,10 +21,12 @@ class Actions(IntEnum):
     down = 2
     left = 3
 
-    attack_up = 4
-    attack_right = 5
-    attack_down = 6
-    attack_left = 7
+    reproduce = 4
+
+    attack_up = 5
+    attack_right = 6
+    attack_down = 7
+    attack_left = 8
 
 class Entity:
     # Represents a basic entity on the map
@@ -43,12 +46,6 @@ class Empty(Entity):
         super().__init__(position, EntityTypes.empty)
         self.nutrition = 0
 
-    def move(self):
-        ...
-
-    def update_target_location(self, i: int, j: int):
-        ...
-
 class BasicFood(Entity):
     def __init__(self, coordinates: Collection[int], entity_type: int):
         super().__init__(coordinates, entity_type)
@@ -67,16 +64,17 @@ class Food(BasicFood):
         super().__init__(coordinates, EntityTypes.food)
         self.nutrition = 40
 
-class Poison(BasicFood):
-    # Represents poison on the map
+class Corpse(BasicFood):
+    def __init__(self, coordinates: Collection[int]):
+        super().__init__(coordinates, EntityTypes.corpse)
+        self.nutrition = 100
 
+class Poison(BasicFood):
     def __init__(self, position):
         super().__init__(position, EntityTypes.poison)
         self.nutrition = -40
 
 class Water(Entity):
-    # Represents water on the map
-    
     def __init__(self, position):
         super().__init__(position, EntityTypes.water)
         self.water = 100
@@ -102,7 +100,11 @@ class Agent(Entity):
         self.thirst = 100
         self.max_thirst = 100
         self.max_hunger = 100
-        self.birth_delay = 0
+        self.birth_delay = 10
+        
+        # test feature
+        self.has_eaten = 0
+        self.has_reproduced = 0
 
         self.state = None
         self.state_prime = None
@@ -116,6 +118,15 @@ class Agent(Entity):
         self.i = self.new_i
         self.j = self.new_j
 
+    # TODO: Change dynamics
+    def execute_attack(self):
+        self.health = min(200, self.health + 100)
+        self.killed = 1
+
+    # Decreas health if agent is attacked
+    def is_attacked(self):
+        self.health = 0
+
     # Update the new location
     def update_new_location(self, i: int, j: int):
         self.new_i = i
@@ -126,7 +137,7 @@ class Agent(Entity):
         self.reward = reward
         self.done = done
 
-    def learn(self, **kwargs):
+    def learn(self, n_epi, **kwargs):
         if self.age > 1:
             self.brain.learn(age=self.age,
                             dead=self.dead,
@@ -134,9 +145,10 @@ class Agent(Entity):
                             state=self.state,
                             reward=self.reward,
                             state_prime=self.state_prime,
-                            done=self.done)
+                            done=self.done,
+                            n_epi=n_epi)
 
-    def can_reproduce(self) -> bool:
+    def can_breed(self) -> bool:
         if not self.dead and self.age > 5 and self.hunger > 30 and self.birth_delay == 0:
             return True
         return False

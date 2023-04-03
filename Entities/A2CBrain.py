@@ -2,73 +2,52 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
 import random
 from typing import Any
 from Brain import Brain
+from collections import namedtuple, deque
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class DDQNBrain(Brain):
-    """ Prioritized Experience Replay Dueling Double Deep Q Network
-    Parameters:
-    -----------
-    input_dim : int, default 153
-        The input dimension
-    output_dim : int, default 8
-        The output dimension
-    exploration : int, default 1000
-        The number of epochs to explore the environment before learning
-    soft_update_freq : int, default 200
-        The frequency at which to align the target and eval nets
-    train_freq : int, default 20
-        The frequency at which to train the agent
-    learning_rate : float, default 1e-3
-        Learning rate
-    batch_size : int
-        The number of training samples to work through before the model's internal parameters are updated.
-    gamma : float, default 0.98
-        Discount factor. How far out should rewards in the future influence the policy?
-    capacity : int, default 10_000
-        Capacity of replay buffer
-    load_model : str, default False
-        Path to an existing model
-    training : bool, default True,
-        Whether to continue training or not
-    """
-    def __init__(self, input_dim=3271, output_dim=4, exploration=1000, soft_update_freq=200, train_freq=20,
-                 learning_rate=1e-3, batch_size=64, capacity=10000, gamma=0.99, load_model=False, training=True):
-        super().__init__(input_dim, output_dim, "DDQN")
-        self.target = DuelingDDQN(input_dim, output_dim)
-        self.agent = DuelingDDQN(input_dim, output_dim)
+    def __init__(self, state_size=200, action_size=9, num_eps_explore=2000, update_nn_freq=300, train_freq=30,
+                 learning_rate=1e-3, batch_size=64, capacity=10000, discount_rate=0.95, load_model=False, training=True):
+        super().__init__(state_size, action_size, "DDQN")
+
+        self.target = DuelingDDQN(state_size, action_size)
+        self.agent = DuelingDDQN(state_size, action_size)
 
         # The eval and the target networks need to be the same in the beginning
         self.agent.load_state_dict(self.target.state_dict())
 
         self.optimizer = torch.optim.Adam(self.agent.parameters(), lr=learning_rate)
-        self.buffer = PrioritizedReplayBuffer(capacity)
         self.loss_fn = nn.MSELoss()
+        self.buffer = PriorityReplayBuffer(capacity)
 
-        self.exploration = exploration
-        self.soft_update_freq = soft_update_freq
+        self.num_eps_explore = num_eps_explore
+        self.update_nn_freq = update_nn_freq
         self.train_freq = train_freq
         self.batch_size = batch_size
-        self.gamma = gamma
-        self.n_epi = 0
+        self.discount_rate = discount_rate
+        self.decay = 0.99
         self.epsilon = 0.9
         self.epsilon_min = 0.05
-        self.decay = 0.99
-
+        self.n_epi = 0
         self.training = training
+        
         if not self.training:
             self.epsilon = 0
 
         if load_model:
-            self.agent.load_state_dict(torch.load(load_model))
+            checkpoint = torch.load(load_model)
+            self.agent.load_state_dict(checkpoint['model_state_dict'])
             self.agent.eval()
 
-            if self.training:
-                self.target.load_state_dict(torch.load(load_model))
-                self.target.eval()
-                self.optimizer = torch.optim.Adam(self.agent.parameters(), lr=learning_rate)
+            self.target.load_state_dict(checkpoint['model_state_dict'])
+            self.target.eval()
+
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def act(self, state, n_epi):
         if self.training:
@@ -80,25 +59,25 @@ class DDQNBrain(Brain):
         action = self.agent.act(torch.FloatTensor(np.expand_dims(state, 0)), self.epsilon)
         return action
 
-    def memorize(self, obs, action, reward, next_obs, done):
-        self.buffer.store(obs, action, reward, next_obs, done)
-
     def train(self):
-        observation, action, reward, next_observation, done, indices, weights = self.buffer.sample(self.batch_size)
+        observations, actions, rewards, next_observations, dones, indices, weights = self.buffer.sample(self.batch_size)
+        
+        observations = torch.FloatTensor(observations)
+        actions = torch.LongTensor(actions)
+        rewards = torch.FloatTensor(rewards)
+        next_observations = torch.FloatTensor(next_observations)
+        dones = torch.FloatTensor(dones)
 
-        observation = torch.FloatTensor(observation)
-        action = torch.LongTensor(action)
-        reward = torch.FloatTensor(reward)
-        next_observation = torch.FloatTensor(next_observation)
-        done = torch.FloatTensor(done)
+        q_values = self.agent.forward(observations)
+        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        q_values = self.agent.forward(observation)
-        next_q_values = self.target.forward(next_observation)
+        next_q_values = self.target.forward(next_observations)
         next_q_value = next_q_values.max(1)[0].detach()
-        q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
-        expected_q_value = reward + self.gamma * (1 - done) * next_q_value
+        expected_q_value = rewards + self.discount_rate * (1 - dones) * next_q_value
 
         loss = self.loss_fn(q_value, expected_q_value)
+
+        # Update memory
         priorities = torch.abs(next_q_value - q_value).detach().numpy()
         self.buffer.update_priorities(indices, priorities)
 
@@ -107,19 +86,16 @@ class DDQNBrain(Brain):
         self.optimizer.step()
 
     def learn(self, age, dead, action, state, reward, state_prime, done, n_epi):
-        self.memorize(state, action, reward, state_prime, done)
+        # Add experience to the memory
+        self.buffer.add(state, action, reward, state_prime, done)
 
-        if n_epi > self.exploration:
+        # If the episodes for exploring are over start training
+        if n_epi > self.num_eps_explore:
             if age % self.train_freq == 0 or dead:
                 self.train()
 
-            if n_epi % self.soft_update_freq == 0:
+            if n_epi % self.update_nn_freq == 0:
                 self.target.load_state_dict(self.agent.state_dict())
-
-    def apply_gaussian_noise(self):
-        with torch.no_grad():
-            self.target.fc.weight.add_(torch.randn(self.target.fc.weight.size()))
-        self.target.load_state_dict(self.agent.state_dict())
 
     def mutate(self):
         weights = self.agent.state_dict()
@@ -133,18 +109,17 @@ class DDQNBrain(Brain):
     def save_model(self, path):
         torch.save(self.target.state_dict(), path)
 
-
-class PrioritizedReplayBuffer(object):
+class PriorityReplayBuffer(object):
     def __init__(self, capacity, alpha=.6, beta=.4, beta_increment=1000):
-        self.capacity = capacity
         self.alpha = alpha
         self.beta = beta
         self.beta_increment = beta_increment
-        self.pos = 0
+        self.idx = 0
+        self.capacity = capacity
         self.memory = []
         self.priorities = np.zeros([self.capacity], dtype=np.float32)
 
-    def store(self, observation, action, reward, next_observation, done):
+    def add(self, observation, action, reward, next_observation, done):
         observation = np.expand_dims(observation, 0)
         next_observation = np.expand_dims(next_observation, 0)
 
@@ -153,25 +128,31 @@ class PrioritizedReplayBuffer(object):
         if len(self.memory) < self.capacity:
             self.memory.append([observation, action, reward, next_observation, done])
         else:
-            self.memory[self.pos] = [observation, action, reward, next_observation, done]
-        self.priorities[self.pos] = max_prior
-        self.pos += 1
-        self.pos = self.pos % self.capacity
+            self.memory[self.idx] = [observation, action, reward, next_observation, done]
+        
+        self.priorities[self.idx] = max_prior
+
+        # Move to the next free memory slot. If we are over the capacity start from the beginning
+        self.idx = (self.idx + 1) % self.capacity
 
     def sample(self, batch_size):
         if len(self.memory) < self.capacity:
             probs = self.priorities[: len(self.memory)]
         else:
             probs = self.priorities
+        
+        # Calculate probabilities
         probs = probs ** self.alpha
         probs = probs / np.sum(probs)
 
         indices = np.random.choice(len(self.memory), batch_size, p=probs)
-        samples = [self.memory[idx] for idx in indices]
+        samples = [self.memory[i] for i in indices]
 
         weights = (len(self.memory) * probs[indices]) ** (- self.beta)
+
         if self.beta < 1:
             self.beta += self.beta_increment
+
         weights = weights / np.max(weights)
         weights = np.array(weights, dtype=np.float32)
 
@@ -179,12 +160,8 @@ class PrioritizedReplayBuffer(object):
         return np.concatenate(observation, 0), action, reward, np.concatenate(next_observation, 0), done, indices, weights
 
     def update_priorities(self, indices, priorities):
-        for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority
-
-    def __len__(self):
-        return len(self.memory)
-
+        for i, priority in zip(indices, priorities):
+            self.priorities[i] = priority
 
 class DuelingDDQN(nn.Module):
     def __init__(self, observation_dim, action_dim):
