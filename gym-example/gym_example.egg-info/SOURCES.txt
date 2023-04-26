@@ -7,3 +7,8 @@ gym_example.egg-info/requires.txt
 gym_example.egg-info/top_level.txt
 gym_example/envs/Survival_Map.py
 gym_example/envs/__init__.py
+gym_example/envs/entities.py
+gym_example/envs/grid.py
+gym_example/envs/Renderer/SimRenderer.py
+gym_example/envs/Renderer/__init__.py
+gym_example/envs/wrappers/__init__.py

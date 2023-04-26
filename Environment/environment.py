@@ -144,7 +144,7 @@ class Environment:
                                    [agent.thirst / agent.max_thirst] +
                                    [agent.hunger / agent.max_hunger] +
                                    [reproduced])
-            
+            print(observation.shape)
             # Update their states
             agent.state_prime = observation
 
