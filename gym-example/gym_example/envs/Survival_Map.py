@@ -12,7 +12,7 @@ import numpy as np
 import pygame
 
 from .grid import Grid
-from .entities import Agent, Entity, Food, Poison, Empty, Corpse, EntityTypes, Actions
+from .entities import Agent, Entity, Food, Poison, Empty, Corpse, Pheromone, Wolf, EntityTypes, Actions
 from .Renderer.SimRenderer import SimRenderer
 from Brain import Brain, RandBrain
 from .Entities.DQNBrain import DQNBrain
@@ -47,7 +47,7 @@ class Survival_Map(MultiAgentEnv):
 
         # Change those with Gym Spaces
         self.action_space = spaces.Discrete(9)
-        self.observation_space = spaces.Box(low=-2, high=50, shape=(200,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-2, high=50, shape=(202,), dtype=np.float32)
 
         render_mode = config.get("render_mode", "rgb_array")
         assert render_mode is None or render_mode in self.metadata_env["render_modes"]
@@ -59,7 +59,6 @@ class Survival_Map(MultiAgentEnv):
         self.reset()
 
     def reset(self, *, seed=None, options=None) -> tuple:
-        #print("GAY")
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
@@ -89,16 +88,22 @@ class Survival_Map(MultiAgentEnv):
         self._init_consumables(Poison, probability = 0.05)
 
         # Reset agents
-        self.agents = [self._add_agent(random_loc=True, brain=self.brains[i], gene=(self.agent_count+1) % 2) for i in range(self.num_brains)]
-        for idx, agent in enumerate(self.agents):
-            agent.id = self.agent_key(agent.gene, idx)
-            self.state[agent.id] = self._get_agent_obs(idx)
-            infos[agent.id] = {}
+        self.agents = []
+        for idx in range(self.num_brains):
+            # Create a new agent and add in the the agent list
+            cur_agent = self._add_agent(random_loc=True, brain=self.brains[idx], gene=(self.agent_count+1) % 2 + 10)
+            cur_agent.id = self.agent_key(cur_agent.gene, self.agent_count)
+            self.agents.append(cur_agent)
+            self.state[cur_agent.id] = self._get_agent_obs(idx)
+            infos[cur_agent.id] = {}
 
         return self.state, infos
     
     def step(self, action_dict):
         self.timesteps += 1
+
+        # We get the length before starting the loop because
+        # if the agents reproduce the list will grow
         agents_len = len(self.agents)
         for idx in range(agents_len):
             self.agents[idx].age = min(self.agents[idx].max_age, self.agents[idx].age + 1)
@@ -133,7 +138,6 @@ class Survival_Map(MultiAgentEnv):
 
                 if self.agents[idx].action == Actions.reproduce:
                     self.agents[idx].update_new_location(self.agents[idx].i, self.agents[idx].j)
-                    self.agents[idx].has_reproduced = -10
                     adjacent_agent = self._get_adjacent_agent(self.agents[idx])
 
                     if self.agents[idx].can_breed() and \
@@ -168,6 +172,8 @@ class Survival_Map(MultiAgentEnv):
                         #print("ADDED: ", new_agent.id)
                         self.agents.append(new_agent)
                         #print("FUCK:", [agent.id for agent in self.agents])
+                    else:
+                        self.agents[idx].miss_reproduced = True
                     
             elif not self.agents[idx].dead:
                 self.agents[idx].update_new_location(self.agents[idx].i, self.agents[idx].j)
@@ -212,22 +218,26 @@ class Survival_Map(MultiAgentEnv):
 
                     # TODO: This is not used for anything for now
                     if target.gene == self.agents[idx].gene:
-                        self.agents[idx].inter_killed = 1
+                        self.agents[idx].inter_killed = True
                     else:
-                        self.agents[idx].intra_killed = 1
+                        self.agents[idx].inter_killed = False
+                else:
+                    self.agents[idx].miss_attacked = True
             
             else:
                 self.agents[idx].update_new_location(self.agents[idx].i, self.agents[idx].j)
 
+        #self.agents = self.grid.get_entities(EntityTypes.agent)
         self._move()
 
         # After performing the action
-        self._update_dead_agents()
+        #self._update_dead_agents()
         self._add_food()
 
-        self._remove_dead_agents()
-
+        # Old place
         self.agents = self.grid.get_entities(EntityTypes.agent)
+        self._remove_dead_agents()
+        self._remove_old_pheromones()
 
         # Observations are a dict mapping agent names to their obs. Not all
         # agents need to be present in the dict in each time step.
@@ -278,32 +288,63 @@ class Survival_Map(MultiAgentEnv):
                                    self.agents[idx].gene == other_agent.gene]) - 1)
         alive_agents = sum([1 for other_agent in self.agents if not other_agent.dead])
         if self.agents[idx].dead:
-            reward = (-1 * alive_agents) + nr_kin_alive
+            print("HERE")
+            reward = -10 #(-1 * alive_agents) + nr_kin_alive
             done = True
-
-        elif alive_agents == 1:
-            reward = (self.agents[idx].health / self.agents[idx].max_health) + \
-                    (self.agents[idx].hunger / self.agents[idx].max_hunger)
-                    #(self.agents[idx].thirst / self.agents[idx].max_thirst)
-
         else:
-            # Percentage of population with the same kin + cur health/max health
-            reward = (nr_kin_alive / alive_agents)
-            reward += (self.agents[idx].health / self.agents[idx].max_health) + \
-                    (self.agents[idx].hunger / self.agents[idx].max_hunger)
-                    #(self.agents[idx].thirst / self.agents[idx].max_thirst)
-            #reward = (agent.health / agent.max_health) + (agent.hunger / agent.max_hunger) + (agent.thirst / agent.max_thirst)
-            #reward = agent.has_eaten
 
-        if self.agents[idx].killed:
-            reward += 0.2
+            if alive_agents == 1:
+                if self.agents[idx].has_eaten in [5, 10, -5]:
+                    if (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.75: reward = self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.50: reward = 1.2 * self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.25: reward = 1.6 * self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.0: reward = 2 * self.agents[idx].has_eaten
+                else:
+                    reward = -0.1
+                # reward = (self.agents[idx].health / self.agents[idx].max_health) + \
+                #         (self.agents[idx].hunger / self.agents[idx].max_hunger)
+                        #(self.agents[idx].thirst / self.agents[idx].max_thirst)
+
+                if self.agents[idx].has_drunk:
+                    if (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.75: reward += 0.5
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.50: reward += 0.8
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.25: reward += 1
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.0: reward += 2
+                else:
+                    reward -= 2
+
+            else:
+                # Percentage of population with the same kin + cur health/max health
+                if self.agents[idx].has_eaten in [5, 10, -5]:
+                    if (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.75: reward = self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.50: reward = 1.2 * self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.25: reward = 1.6 * self.agents[idx].has_eaten
+                    elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.0: reward = 2 * self.agents[idx].has_eaten
+                else:
+                    reward = -0.1
+                        #(self.agents[idx].thirst / self.agents[idx].max_thirst)
+                #reward = (agent.health / agent.max_health) + (agent.hunger / agent.max_hunger) + (agent.thirst / agent.max_thirst)
+                #reward = agent.has_eaten
+
+            if self.agents[idx].killed:
+                if self.agents[idx].inter_killed:
+                    reward -= 0.5
+                else:
+                    reward += 4
+
+            if self.agents[idx].miss_reproduced:
+                reward -= 1
+            elif self.agents[idx].birth_delay == 30:
+                reward += 10
+
+            if self.agents[idx].miss_attacked:
+                reward -= 1
+
+        #print("HMMMM: ", reward)
 
         return reward, done, False, {}
 
     def _get_agent_obs(self, agent_idx):
-        # REMOVED THIS
-        #self.agents = self.grid.get_entities(EntityTypes.agent)
-        
         # Get separate grid for separate entities
         get_gene = np.vectorize(lambda item: self._get_gene(item))
         gene_grid = get_gene(self.grid.grid)
@@ -335,7 +376,8 @@ class Survival_Map(MultiAgentEnv):
                                 [self.agents[agent_idx].health / self.agents[agent_idx].max_health] +
                                 [self.agents[agent_idx].thirst / self.agents[agent_idx].max_thirst] +
                                 [self.agents[agent_idx].hunger / self.agents[agent_idx].max_hunger] +
-                                [self.agents[agent_idx].birth_delay])
+                                [self.agents[agent_idx].birth_delay] +
+                                [self.agents[agent_idx].i, self.agents[agent_idx].j])
         
         # Update their states
         self.agents[agent_idx].state_prime = observation
@@ -386,11 +428,6 @@ class Survival_Map(MultiAgentEnv):
             for _ in range(3):
                 self.grid.set_random(Poison, p=0.2)
 
-    def _update_dead_agents(self):
-        for agent in self.agents:
-            if agent.health <= 0:# or agent.age == agent.max_age:
-                agent.dead = True
-
     def _move(self):
         impossible_coordinates = True
         while impossible_coordinates:
@@ -398,9 +435,6 @@ class Survival_Map(MultiAgentEnv):
             impossible_coordinates = self._get_impossible_coordinates()
             for agent in self.agents:
                 if (agent.new_i, agent.new_j) in impossible_coordinates:
-                    agent.update_new_location(agent.i, agent.j)
-                
-                if (agent.new_i, agent.new_j) in self.grid.water_coordinates:
                     agent.update_new_location(agent.i, agent.j)
         
         for agent in self.agents:
@@ -417,61 +451,73 @@ class Survival_Map(MultiAgentEnv):
             self.grid.grid[agent.i, agent.j+1].entity_type]:
 
             agent.thirst = 100
+            agent.has_drunk = True
     
-    def _eat(self, agent: Agent):
+    def _eat(self, agent: Union[Type[Agent], Type[Wolf]]):
         if self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.food:
             agent.hunger = min(100, agent.hunger + 40)
             agent.hunger = max(0, agent.hunger)
-            #agent.has_eaten = 10
+            agent.has_eaten = 5
 
         elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.corpse:
             agent.hunger = 100
-            #agent.has_eaten = 10
+            agent.has_eaten = 10
 
         elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.poison:
-            agent.hunger = min(100, agent.hunger + 10)
+            agent.hunger = min(100, agent.hunger - 10)
             agent.hunger = max(0, agent.hunger)
             agent.health = min(200, agent.health - 10)
-            #agent.has_eaten = -10
+            agent.has_eaten = -5
 
-        #else:
-            #agent.has_eaten = -1
+        # else: # hasn't eaten anything
+        #     agent.has_eaten = -0.01
 
     def _update_agent_state(self):
         for agent in self.agents:
             agent.state = agent.state_prime
-
-            # Take damage if hungry
-            if agent.hunger == 0:
-                agent.health -= 5
-
-            # if agent.thirst == 0:
-            #     agent.health -= 5
+            #print("ID: ", agent.id, "health: ", agent.health, "hunger: ", agent.hunger, "thirst: ", agent.thirst)
 
             # Heal if not hungry and not thirsty
             if agent.hunger >= 50 and agent.thirst >= 50:
-                agent.health += 5
+                agent.health = min(agent.max_health, agent.health + 5)
             
             # Heal if not hungry only
             elif agent.hunger >= 50:
-                agent.health += 2
+                agent.health = min(agent.max_health, agent.health + 2)
 
             # Heal if not thirsty only
             elif agent.thirst >= 50:
-                agent.health += 2
+                agent.health = min(agent.max_health, agent.health + 2)
+
+            # Take damage if hungry
+            if agent.hunger == 0:
+                agent.health = max(0, agent.health - 5)
+
+            if agent.thirst == 0:
+                agent.health = max(0, agent.health - 5)
 
 
             # The agent must get hungry and thirsty after so much running! Phew...
             agent.hunger = max(0, agent.hunger - 2)
-            #agent.thirst = max(0, agent.thirst - 2)
+            agent.thirst = max(0, agent.thirst - 1)
 
             # Reduce the birth delay
             agent.birth_delay = max(0, agent.birth_delay - 1)
 
+            # Reset stats
+            agent.has_eaten = 0
+            agent.has_drunk = False
+            agent.miss_attacked = False
+            agent.miss_reproduced = False
+            agent.inter_killed = False
+            agent.miss_killed = False
             agent.killed = 0
 
     def _update_agent_position(self, agent: Agent):
-        self.grid.grid[agent.i, agent.j] = Empty((agent.i, agent.j))
+        # Needed because otherwise sometimes some agents are deleted accidentally
+        if not (type(self.grid.grid[agent.i, agent.j]) == Agent and self.grid.grid[agent.i, agent.j] != agent):
+            # print(type(self.grid.grid[agent.i, agent.j]))
+            self.grid.grid[agent.i, agent.j] = Pheromone((agent.i, agent.j))
         self.grid.grid[agent.new_i, agent.new_j] = agent
         agent.move()
 
@@ -505,7 +551,8 @@ class Survival_Map(MultiAgentEnv):
         
     def _remove_dead_agents(self):
         for agent in self.agents:
-            if agent.dead:
+            if agent.health <= 0:# or agent.age == agent.max_age:
+                agent.dead = True
                 # Update statistics
                 self.dead_agents.append(agent)
                 self.dead_scores.append(agent.age)
@@ -513,6 +560,13 @@ class Survival_Map(MultiAgentEnv):
                 self.agents.remove(agent)
 
                 self.grid.grid[agent.i, agent.j] = Corpse((agent.i, agent.j))
+
+    def _remove_old_pheromones(self):
+        pheromones = self.grid.get_entities(EntityTypes.pheromone)
+        for pheromon in pheromones:
+            pheromon.lasting_time -= 1
+            if pheromon.lasting_time <= 0:
+                self.grid.grid[pheromon.i, pheromon.j] = Empty((pheromon.i, pheromon.j))
 
     def _get_empty_cells_surroundings(self, agent: Agent) -> List[Union[int, int]] or List[None]:
         observation = self.grid.get_surroundings(agent.i, agent.j, 3)
@@ -551,6 +605,11 @@ class Survival_Map(MultiAgentEnv):
         return coordinates
     
     def _get_impossible_coordinates(self):
+        # If they want in to go into the water, update their next coordinates
+        for agent in self.agents:
+            if (agent.new_i, agent.new_j) in self.grid.water_coordinates:
+                agent.update_new_location(agent.i, agent.j)
+
         new_coordinates = [(agent.new_i, agent.new_j) for agent in self.agents]
         if new_coordinates:
             unq, count = np.unique(new_coordinates, axis=0, return_counts=True)
@@ -578,17 +637,14 @@ class Survival_Map(MultiAgentEnv):
             return .5
         elif obj.entity_type == EntityTypes.poison:
             return -1.
-        elif obj.entity_type == EntityTypes.agent:
-            if obj.health < 0:
-                return 1.
-            else:
-                return 0.
+        elif obj.entity_type == EntityTypes.corpse:
+            return 3.
         else:
             return 0.
 
     def _get_water(self, obj: Entity or Agent) -> float:
         if obj.entity_type == EntityTypes.water:
-            return 1.
+            return 2.
         else:
             return 0.
 

@@ -2,9 +2,7 @@ import random
 import numpy as np
 import pygame as pg
 from typing import List
-import sys
-sys.path.append("C:\\imperial\\MengProject\\Environment")
-from entities import Entity, Agent, EntityTypes, Actions
+from ..entities import Entity, Agent, EntityTypes, Actions
 
 class SimRenderer:
     def __init__(self,
@@ -77,8 +75,11 @@ class SimRenderer:
 
         # Draw and update all entities
         self.screen.blit(self.background, (0, 0))
+        
         self.draw_agents(agents)
         self.draw_food(grid)
+        self.draw_pheromoes(grid)
+
         pg.display.update()
         self.clock.tick(fps)
 
@@ -118,21 +119,26 @@ class SimRenderer:
     def draw_food(self, grid: np.array):
         food = grid.get_entities(self.entities.food)
         for item in food:
-            self.draw_food_rect(item, color=(255, 255, 255))
+            self.draw_rect(item, color=(255, 255, 255))
 
         corpse = grid.get_entities(self.entities.corpse)
         for item in corpse:
-            self.draw_food_rect(item, color=(255, 0, 0))
+            self.draw_rect(item, color=(255, 0, 0))
 
         poison = grid.get_entities(self.entities.poison)
         for item in poison:
-            self.draw_food_rect(item, color=(0, 0, 0))
+            self.draw_rect(item, color=(0, 0, 0))
 
         water = grid.get_entities(self.entities.water)
         for item in water:
             self.draw_water_rect(item)
     
-    def draw_food_rect(self, item: Entity, color: tuple):
+    def draw_pheromoes(self, grid: np.array):
+        pheromones = grid.get_entities(self.entities.pheromone)
+        for item in pheromones:
+            self.draw_rect(item, color=(126, 87, 194))
+
+    def draw_rect(self, item: Entity, color: tuple):
         j = (item.j * self.square_size) + int(self.square_size / 2.5)
         i = (item.i * self.square_size) + int(self.square_size / 2.5)
         size = self.square_size - int(self.square_size / 2.5) * 2

@@ -1,12 +1,33 @@
 import random
 import pprint
+import os
+import numpy as np
 
 import ray
 from ray import air, tune
+from ray.tune.registry import register_env
+from ray.rllib.models import ModelCatalog
 from ray.tune.schedulers import PopulationBasedTraining
+from ray.rllib.algorithms.callbacks import DefaultCallbacks
+
+from gym_example.envs.Survival_Map import Survival_Map
+from gym_example.envs.Entities.lstmBrain import TorchRNNModel
+from gym_example.envs.Entities.A2CBrain import DDQNBrain
+
+def policy_mapper(agent_id, episode, worker):
+    if agent_id.startswith("gene-1"):
+        return "main"
+    else:
+        return "gene_2_policy"
 
 if __name__ == "__main__":
     import argparse
+
+    # Register environment
+    register_env("survival-map-v0", lambda config: Survival_Map(config))
+
+    ModelCatalog.register_custom_model(
+        "rnn", TorchRNNModel)
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -25,13 +46,14 @@ if __name__ == "__main__":
         return config
 
     hyperparam_mutations = {
-        "lambda": lambda: random.uniform(0.9, 1.0),
-        "clip_param": lambda: random.uniform(0.01, 0.5),
+        "lambda": [0.75, 0.80, 0.85, 0.90, 0.95],
+        "clip_param": [0.15, 0.20, 0.25, 0.30, 0.35, 0,5],
         "lr": [1e-3, 5e-4, 1e-4, 5e-5, 1e-5],
-        "num_sgd_iter": lambda: random.randint(1, 30),
-        "sgd_minibatch_size": lambda: random.randint(128, 16384),
-        "train_batch_size": lambda: random.randint(2000, 160000),
-        "entropy_coeff": lambda: random.uniform(0, 0.01),
+        "gamma": [0.9, 0.93, 0.95, 0.97, 0.99],
+        "entropy_coeff": [0, 1e-2, 5e-3, 1e-4, 5e-5],
+        "num_sgd_iter": [1, 3, 5, 10, 15, 20, 25],
+        "sgd_minibatch_size": [64, 128, 256, 512, 1024, 2048],
+        "train_batch_size": lambda: random.randint(128, 8192),
     }
 
     pbt = PopulationBasedTraining(
@@ -44,7 +66,7 @@ if __name__ == "__main__":
     )
 
     # Stop when we've either reached 100 training iterations or reward=300
-    stopping_criteria = {"training_iteration": 100, "episode_reward_mean": 50000}
+    stopping_criteria = {"training_iteration": 1000, "episode_reward_mean": 100000}
 
     tuner = tune.Tuner(
         "PPO",
@@ -52,24 +74,45 @@ if __name__ == "__main__":
             metric="episode_reward_mean",
             mode="max",
             scheduler=pbt,
-            num_samples=1 if args.smoke_test else 2,
+            num_samples=1 if args.smoke_test else 3,
         ),
         param_space={
             "env": "survival-map-v0",
+            "env_config": {
+                "size": 30,
+                "brains": [DDQNBrain(), DDQNBrain(), DDQNBrain(), DDQNBrain(), DDQNBrain(), DDQNBrain()],
+                "max_agents": 20,
+                "render_mode": "rgb_array"
+            },
             "kl_coeff": 1.0,
-            "num_workers": 4,
-            "num_cpus": 1,  # number of CPUs to use per trial
-            "num_gpus": 0,  # number of GPUs to use per trial
-            "model": {"free_log_std": True},
+            "num_workers": 1,
+            "num_gpus": int(os.environ.get("RLLIB_NUM_GPUS", "0")),  # number of GPUs to use per trial
+            "model": {
+                "custom_model": "rnn",
+                "max_seq_len": 20,
+            },
+            "framework": "torch",
+            "multiagent": {
+            # When you define the policy and map the agent_id to that policy, you
+            # are defining the action and observation space for that agent.
+            "policy_mapping_fn": policy_mapper,
+            "policies": {"main", "gene_2_policy"},
+            # Always just train the "main" policy.
+            "policies_to_train": ["main", "gene_2_policy"],
+            "policy_map_cache": "/opt/project/temp_cache",
+            "policy_map_capacity": 200
+            },
+
             # These params are tuned from a fixed starting value.
+            "gamma": 0.99,
             "lambda": 0.95,
             "clip_param": 0.2,
-            "lr": 1e-4,
+            "lr": 1e-3,
+            "entropy_coeff": 0,
+            "sgd_minibatch_size": 64,
             # These params start off randomly drawn from a set.
-            "num_sgd_iter": tune.choice([10, 20, 30]),
-            "sgd_minibatch_size": tune.choice([128, 512, 2048]),
-            "train_batch_size": tune.choice([10000, 20000, 40000]),
-            "entropy_coeff": tune.choice([0, 0.0001, 0.001, 0.01]),
+            "num_sgd_iter": tune.choice([3, 15, 25]),
+            "train_batch_size": tune.choice([1024, 2048, 4096, 8192]),
         },
         run_config=air.RunConfig(stop=stopping_criteria),
     )
