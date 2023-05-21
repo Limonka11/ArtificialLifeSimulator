@@ -2,7 +2,7 @@ import random
 import numpy as np
 import pygame as pg
 from typing import List
-from ..entities import Entity, Agent, EntityTypes, Actions
+from ..entities import Entity, Agent, EntityTypes, Actions, Wolf
 
 class SimRenderer:
     def __init__(self,
@@ -71,6 +71,9 @@ class SimRenderer:
             sword = pg.image.load("C:\\imperial\\MengProject\\Assets\\attack.png").convert_alpha()
             self.scaled_sword = pg.transform.scale(sword, (15, 15))
 
+            tree = pg.image.load("C:\\imperial\\MengProject\\Assets\\tree.png").convert_alpha()
+            self.scaled_tree = pg.transform.scale(tree, (25, 25))
+
             self.rendered = True
 
         # Draw and update all entities
@@ -79,6 +82,7 @@ class SimRenderer:
         self.draw_agents(agents)
         self.draw_food(grid)
         self.draw_pheromoes(grid)
+        self.draw_trees(grid)
 
         pg.display.update()
         self.clock.tick(fps)
@@ -98,11 +102,15 @@ class SimRenderer:
                 i = (agent.i * self.square_size) + max(1, int(self.square_size / 8))
                 size = self.square_size - max(1, int(self.square_size / 8) * 2)
                 surface = (j, i, size, size)
-                pg.draw.circle(self.screen, body_color, (j+size/2, i+size/2), size/2)
                 
+                if type(agent) == Agent:
+                    pg.draw.circle(self.screen, body_color, (j+size/2, i+size/2), size/2)
+                elif type(agent) == Wolf:
+                    pg.draw.rect(self.screen, body_color, pg.Rect(j, i, size, size))
+                
+                # draw the eyes of egents
                 size = self.square_size - max(1, int(self.square_size * .9))
 
-                # draw the eyes of egents
                 j = (agent.j * self.square_size) + max(1, int(self.square_size / 3))
                 i = (agent.i * self.square_size) + max(1, int(self.square_size / 3))
                 surface = (j, i, size, size)
@@ -132,6 +140,15 @@ class SimRenderer:
         water = grid.get_entities(self.entities.water)
         for item in water:
             self.draw_water_rect(item)
+
+    def draw_trees(self, grid: np.array):
+        trees = grid.get_entities(self.entities.tree)
+
+        for tree in trees:
+            j = (tree.j * self.square_size) + max(1, int(self.square_size / 8))
+            i = (tree.i * self.square_size) + max(1, int(self.square_size / 8))
+            size = self.square_size - int(self.square_size / 2.5) * 2
+            self.screen.blit(self.scaled_tree, (j - size, i - size))
     
     def draw_pheromoes(self, grid: np.array):
         pheromones = grid.get_entities(self.entities.pheromone)

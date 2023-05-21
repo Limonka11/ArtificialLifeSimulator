@@ -14,6 +14,9 @@ class EntityTypes(IntEnum):
     agent = 3
     water = 4
     corpse = 5
+    pheromone = 6
+    wolf = 7
+    tree = 8
 
 class Actions(IntEnum):
     up = 0
@@ -29,8 +32,6 @@ class Actions(IntEnum):
     attack_left = 8
 
 class Entity:
-    # Represents a basic entity on the map
-
     def __init__(self, position: Collection[int], entity_type: int):
         assert len(position) == 2
 
@@ -40,10 +41,13 @@ class Entity:
         self.entity_type = entity_type
 
 class Empty(Entity):
-    # Represent an empty space on the map
-
     def __init__(self, position: Collection[int]):
         super().__init__(position, EntityTypes.empty)
+        self.nutrition = 0
+
+class Tree(Entity):
+    def __init__(self, position: Collection[int]):
+        super().__init__(position, EntityTypes.tree)
         self.nutrition = 0
 
 class BasicFood(Entity):
@@ -58,6 +62,11 @@ class BasicFood(Entity):
     @nutrition.setter
     def nutrition(self, val):
         self._nutrition = val
+
+class Pheromone(BasicFood):
+    def __init__(self, coordinates: Collection[int]):
+        super().__init__(coordinates, EntityTypes.pheromone)
+        self.lasting_time = 7
 
 class Food(BasicFood):
     def __init__(self, coordinates: Collection[int]):
@@ -105,7 +114,11 @@ class Agent(Entity):
         
         # test feature
         self.has_eaten = 0
+        self.has_drunk = False
         self.has_reproduced = 0
+        self.miss_reproduced = False
+        self.miss_attacked = False
+        self.inter_killed = False
 
         self.state = None
         self.state_prime = None
@@ -138,6 +151,7 @@ class Agent(Entity):
         self.reward = reward
         self.done = done
 
+    # Currently not used!
     def learn(self, n_epi, **kwargs):
         if self.age > 1:
             self.brain.learn(age=self.age,
@@ -153,3 +167,15 @@ class Agent(Entity):
         if not self.dead and self.age > 5 and self.hunger > 30 and self.birth_delay == 0:
             return True
         return False
+    
+class Wolf(Agent):
+    def __init__(self,
+            position: Collection[int],
+            brain: Brain = None,
+            gene: int = None):
+        super().__init__(position, brain, gene)
+
+        self.hunger = 200
+        self.thirst = 200
+        self.max_thirst = 200
+        self.max_hunger = 200

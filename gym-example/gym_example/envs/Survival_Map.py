@@ -12,7 +12,7 @@ import numpy as np
 import pygame
 
 from .grid import Grid
-from .entities import Agent, Entity, Food, Poison, Empty, Corpse, Pheromone, Wolf, EntityTypes, Actions
+from .entities import Agent, Entity, Food, Poison, Empty, Corpse, Pheromone, Wolf, EntityTypes, Actions, Tree
 from .Renderer.SimRenderer import SimRenderer
 from Brain import Brain, RandBrain
 from .Entities.DQNBrain import DQNBrain
@@ -47,7 +47,7 @@ class Survival_Map(MultiAgentEnv):
 
         # Change those with Gym Spaces
         self.action_space = spaces.Discrete(9)
-        self.observation_space = spaces.Box(low=-2, high=50, shape=(202,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-6, high=50, shape=(300,), dtype=np.float32)
 
         render_mode = config.get("render_mode", "rgb_array")
         assert render_mode is None or render_mode in self.metadata_env["render_modes"]
@@ -86,13 +86,17 @@ class Survival_Map(MultiAgentEnv):
         # Reset Consumables
         self._init_consumables(Food, probability = 0.1)
         self._init_consumables(Poison, probability = 0.05)
+        self._init_trees(Tree, probability=0.02)
 
         # Reset agents
         self.agents = []
         for idx in range(self.num_brains):
             # Create a new agent and add in the the agent list
-            cur_agent = self._add_agent(random_loc=True, brain=self.brains[idx], gene=(self.agent_count+1) % 2 + 10)
-            cur_agent.id = self.agent_key(cur_agent.gene, self.agent_count)
+            cur_agent = self._add_agent(random_loc=True,
+                                        brain=self.brains[idx],
+                                        gene=(self.agent_count+1) % 2 + 10,
+                                        type=Agent if (self.agent_count+1) % 3 != 0 else Wolf)
+            cur_agent.id = self.agent_key(cur_agent.gene, self.agent_count, type(cur_agent))
             self.agents.append(cur_agent)
             self.state[cur_agent.id] = self._get_agent_obs(idx)
             infos[cur_agent.id] = {}
@@ -143,7 +147,9 @@ class Survival_Map(MultiAgentEnv):
                     if self.agents[idx].can_breed() and \
                        len(self.agents) <= self.max_agents and \
                        adjacent_agent and \
-                       type(self.agents[idx].brain) is type(adjacent_agent.brain):
+                       type(self.agents[idx].brain) is type(adjacent_agent.brain) and \
+                       type(self.agents[idx]) is type(adjacent_agent):
+                        #print(type(self.agents[idx]), " just reprocuded")
                         
                         #new_brain = self._crossover(agent, adjacent_agent)
                         new_brain = self.agents[idx].brain
@@ -160,18 +166,19 @@ class Survival_Map(MultiAgentEnv):
 
                         if coordinates:
                             new_agent = self._add_agent(coordinates=coordinates[random.randint(0, len(coordinates) - 1)],
-                                            brain=new_brain, gene=self.agents[idx].gene)
+                                            brain=new_brain, gene=self.agents[idx].gene, type=type(self.agents[idx]))
                         else:
-                            new_agent = self._add_agent(random_loc=True, brain=new_brain, gene=self.agents[idx].gene)
+                            new_agent = self._add_agent(random_loc=True, brain=new_brain, gene=self.agents[idx].gene,
+                                                        type=type(self.agents[idx]))
 
                         # Required because sometimes an id that has already existed is generated
-                        new_agent.id = self.agent_key(self.agents[idx].gene, self.agent_count)
+                        new_agent.id = self.agent_key(self.agents[idx].gene, self.agent_count, type=type(self.agents[idx]))
                         
                         # Need to add the next location
                         new_agent.update_new_location(self.agents[idx].i, self.agents[idx].j)
                         #print("ADDED: ", new_agent.id)
                         self.agents.append(new_agent)
-                        #print("FUCK:", [agent.id for agent in self.agents])
+                        #print("DUCK:", [agent.id for agent in self.agents])
                     else:
                         self.agents[idx].miss_reproduced = True
                     
@@ -215,27 +222,40 @@ class Survival_Map(MultiAgentEnv):
                 if target.entity_type == EntityTypes.agent:
                     target.is_attacked()
                     self.agents[idx].execute_attack()
+                    if type(self.agents[idx]) == Agent:
+                        if target.gene == self.agents[idx].gene:
+                            self.agents[idx].inter_killed = True
+                        else:
+                            self.agents[idx].inter_killed = False
 
-                    # TODO: This is not used for anything for now
-                    if target.gene == self.agents[idx].gene:
-                        self.agents[idx].inter_killed = True
-                    else:
-                        self.agents[idx].inter_killed = False
+                    elif type(self.agents[idx]) == Wolf:
+                        self.agents[idx].has_eaten = 10
+
+                if target.entity_type == EntityTypes.wolf:
+                    if type(self.agents[idx]) == Agent:
+                        self.agents[idx].dead = True
+
+                    elif type(self.agents[idx]) == Wolf:
+                        target.is_attacked()
+                        self.agents[idx].execute_attack()
+                        
+                        if target.gene == self.agents[idx].gene:
+                            self.agents[idx].inter_killed = True
+                        else:
+                            self.agents[idx].inter_killed = False
                 else:
                     self.agents[idx].miss_attacked = True
             
             else:
                 self.agents[idx].update_new_location(self.agents[idx].i, self.agents[idx].j)
 
-        #self.agents = self.grid.get_entities(EntityTypes.agent)
         self._move()
 
         # After performing the action
-        #self._update_dead_agents()
         self._add_food()
 
-        # Old place
         self.agents = self.grid.get_entities(EntityTypes.agent)
+
         self._remove_dead_agents()
         self._remove_old_pheromones()
 
@@ -278,8 +298,9 @@ class Survival_Map(MultiAgentEnv):
             pygame.display.quit()
             pygame.quit()
 
-    def agent_key(self, gene, agent_index):
-          return "gene-" + str(gene) + "-num-" + str(agent_index + 1)
+    def agent_key(self, gene, agent_index, type: Union[Agent, Wolf] = Agent):
+          type_str = "agent" if type == Agent else "wolf"
+          return type_str + "-gene-" + str(gene) + "-num-" + str(agent_index + 1)
     
     def _get_rewards(self, idx):
         done = False
@@ -310,8 +331,8 @@ class Survival_Map(MultiAgentEnv):
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.50: reward += 0.8
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.25: reward += 1
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.0: reward += 2
-                else:
-                    reward -= 2
+                elif self.agents[idx].thirst == 0:
+                    reward -= 0.5
 
             else:
                 # Percentage of population with the same kin + cur health/max health
@@ -322,6 +343,17 @@ class Survival_Map(MultiAgentEnv):
                     elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.0: reward = 2 * self.agents[idx].has_eaten
                 else:
                     reward = -0.1
+
+                if self.agents[idx].has_drunk:
+                    #print("WATER NICE")
+                    if (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.75: reward += 0.5
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.50: reward += 0.8
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.25: reward += 1
+                    elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.0: reward += 2
+                elif self.agents[idx].thirst == 0:
+                    #print("NEED TO DRINK")
+                    reward -= 0.5
+
                         #(self.agents[idx].thirst / self.agents[idx].max_thirst)
                 #reward = (agent.health / agent.max_health) + (agent.hunger / agent.max_hunger) + (agent.thirst / agent.max_thirst)
                 #reward = agent.has_eaten
@@ -339,6 +371,8 @@ class Survival_Map(MultiAgentEnv):
 
             if self.agents[idx].miss_attacked:
                 reward -= 1
+        if type(self.agents[idx]) == Wolf:
+            print("WOLF: ", reward, self.agents[idx].health)
 
         #print("HMMMM: ", reward)
 
@@ -349,11 +383,17 @@ class Survival_Map(MultiAgentEnv):
         get_gene = np.vectorize(lambda item: self._get_gene(item))
         gene_grid = get_gene(self.grid.grid)
 
+        get_type = np.vectorize(lambda item: self._get_type(item))
+        type_grid = get_type(self.grid.grid)
+
         get_food = np.vectorize(lambda item: self._get_food(item))
         food_grid = get_food(self.grid.grid)
 
         get_water = np.vectorize(lambda item: self._get_water(item))
         water_grid = get_water(self.grid.grid)
+
+        get_trees = np.vectorize(lambda item: self._get_tree(item))
+        tree_grid = get_trees(self.grid.grid)
 
         get_health = np.vectorize(
             lambda obj: obj.health / obj.max_health if obj.entity_type == EntityTypes.agent else -1)
@@ -362,17 +402,21 @@ class Survival_Map(MultiAgentEnv):
         #reproduced = self.agents[agent_idx].birth_delay == 30
 
         gene_observed = self.grid.get_surroundings(self.agents[agent_idx].i,self.agents[agent_idx].j, 3, gene_grid)
-        gene_observed[(gene_observed != 0) & (gene_observed != self.agents[agent_idx].gene)] = -1
-        gene_observed[gene_observed == self.agents[agent_idx].gene] = 1
+        gene_observed[(gene_observed != 0) & (gene_observed != self.agents[agent_idx].gene)] = -6.
+        gene_observed[gene_observed == self.agents[agent_idx].gene] = 6.
         gene_observed = list(gene_observed.flatten())
+        type_observed = list(self.grid.get_surroundings(self.agents[agent_idx].i, self.agents[agent_idx].j, 3, type_grid).flatten())
         food_observed = list(self.grid.get_surroundings(self.agents[agent_idx].i, self.agents[agent_idx].j, 3, food_grid).flatten())
         water_observed = list(self.grid.get_surroundings(self.agents[agent_idx].i, self.agents[agent_idx].j, 3, water_grid).flatten())
+        tree_observed = list(self.grid.get_surroundings(self.agents[agent_idx].i, self.agents[agent_idx].j, 3, tree_grid).flatten())
         health_observed = list(self.grid.get_surroundings(self.agents[agent_idx].i, self.agents[agent_idx].j, 3, health_grid).flatten())
         
         observation = np.array(gene_observed +
+                                type_observed +
                                 food_observed +
                                 health_observed +
                                 water_observed +
+                                tree_observed +
                                 [self.agents[agent_idx].health / self.agents[agent_idx].max_health] +
                                 [self.agents[agent_idx].thirst / self.agents[agent_idx].max_thirst] +
                                 [self.agents[agent_idx].hunger / self.agents[agent_idx].max_hunger] +
@@ -400,7 +444,14 @@ class Survival_Map(MultiAgentEnv):
     def _init_consumables(self,
                         entity: Union[Type[Food], Type[Poison]],
                         probability: float):
-            
+        entity_type = entity([-1, -1]).entity_type
+        for _ in range(self.size * self.size):
+            if np.random.random() < probability:
+                self.grid.set_random(entity, p=1)
+
+    def _init_trees(self,
+                    entity: Type[Tree],
+                    probability: float):
         entity_type = entity([-1, -1]).entity_type
         for _ in range(self.size * self.size):
             if np.random.random() < probability:
@@ -410,13 +461,14 @@ class Survival_Map(MultiAgentEnv):
                coordinates: Collection[int] = None,
                brain: Brain = None,
                gene: int = None,
+               type: Union[Type[Agent], Type[Wolf]] = Agent,
                random_loc: bool = False,
                p: float = 1.) -> Type[Entity] or None:
         self.agent_count += 1
         if random_loc:
-            return self.grid.set_random(Agent, p=p, brain=brain, gene=gene)
+            return self.grid.set_random(type, p=p, brain=brain, gene=gene)
         else:
-            return self.grid.set_cell(coordinates[0], coordinates[1], Agent, brain=brain, gene=gene)
+            return self.grid.set_cell(coordinates[0], coordinates[1], type, brain=brain, gene=gene)
         
 
     def _add_food(self):
@@ -443,31 +495,46 @@ class Survival_Map(MultiAgentEnv):
                 self._drink(agent)
                 self._update_agent_position(agent)
 
-    def _drink(self, agent: Agent):
-        if agent.i + 1 < self.grid.width and agent.i - 1 > -1 and agent.j + 1 <  self.grid.height and agent.j - 1 > -1 and EntityTypes.water in [
+    def _drink(self, agent: Union[Type[Agent], Type[Wolf]]):
+        if agent.i + 1 < self.grid.width and agent.i - 1 > -1 and agent.j + 1 < self.grid.height and agent.j - 1 > -1 and EntityTypes.water in [
             self.grid.grid[agent.i-1, agent.j].entity_type,
             self.grid.grid[agent.i, agent.j-1].entity_type,
             self.grid.grid[agent.i+1, agent.j].entity_type,
             self.grid.grid[agent.i, agent.j+1].entity_type]:
 
-            agent.thirst = 100
+            agent.thirst = 200 if type(agent) == Wolf else 100
             agent.has_drunk = True
     
     def _eat(self, agent: Union[Type[Agent], Type[Wolf]]):
-        if self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.food:
-            agent.hunger = min(100, agent.hunger + 40)
-            agent.hunger = max(0, agent.hunger)
-            agent.has_eaten = 5
+        if type(agent) == Agent:
+            if self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.food:
+                agent.hunger = min(100, agent.hunger + 40)
+                agent.hunger = max(0, agent.hunger)
+                agent.has_eaten = 5
 
-        elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.corpse:
-            agent.hunger = 100
-            agent.has_eaten = 10
+            elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.corpse:
+                agent.hunger = 100
+                agent.has_eaten = 10
 
-        elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.poison:
-            agent.hunger = min(100, agent.hunger - 10)
-            agent.hunger = max(0, agent.hunger)
-            agent.health = min(200, agent.health - 10)
-            agent.has_eaten = -5
+            elif self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.poison:
+                agent.hunger = min(100, agent.hunger - 10)
+                agent.hunger = max(0, agent.hunger)
+                agent.health = min(200, agent.health - 10)
+                agent.has_eaten = -5
+        elif type(agent) == Wolf:
+            eaten_agents = self._get_eaten_agents(agent)
+
+            if len(eaten_agents) > 0:
+                # print("EATEN")
+                agent.hunger = agent.max_hunger
+                agent.has_eaten = 10
+
+                for agent in eaten_agents:
+                    agent.health = 0
+
+            if self.grid.grid[agent.new_i, agent.new_j].entity_type == EntityTypes.corpse:
+                agent.hunger = agent.max_hunger
+                agent.has_eaten = 10
 
         # else: # hasn't eaten anything
         #     agent.has_eaten = -0.01
@@ -475,7 +542,7 @@ class Survival_Map(MultiAgentEnv):
     def _update_agent_state(self):
         for agent in self.agents:
             agent.state = agent.state_prime
-            #print("ID: ", agent.id, "health: ", agent.health, "hunger: ", agent.hunger, "thirst: ", agent.thirst)
+            # print("ID: ", agent.id, "health: ", agent.health, "hunger: ", agent.hunger, "thirst: ", agent.thirst)
 
             # Heal if not hungry and not thirsty
             if agent.hunger >= 50 and agent.thirst >= 50:
@@ -496,7 +563,6 @@ class Survival_Map(MultiAgentEnv):
             if agent.thirst == 0:
                 agent.health = max(0, agent.health - 5)
 
-
             # The agent must get hungry and thirsty after so much running! Phew...
             agent.hunger = max(0, agent.hunger - 2)
             agent.thirst = max(0, agent.thirst - 1)
@@ -515,8 +581,11 @@ class Survival_Map(MultiAgentEnv):
 
     def _update_agent_position(self, agent: Agent):
         # Needed because otherwise sometimes some agents are deleted accidentally
-        if not (type(self.grid.grid[agent.i, agent.j]) == Agent and self.grid.grid[agent.i, agent.j] != agent):
+        if not (type(self.grid.grid[agent.i, agent.j]) == Agent and \
+                self.grid.grid[agent.i, agent.j] != agent):
             # print(type(self.grid.grid[agent.i, agent.j]))
+            # if type(self.grid.grid[agent.i, agent.j]) == Wolf and self.grid.grid[agent.i, agent.j] != agent:
+            #     print("YESSSSSS")
             self.grid.grid[agent.i, agent.j] = Pheromone((agent.i, agent.j))
         self.grid.grid[agent.new_i, agent.new_j] = agent
         agent.move()
@@ -577,7 +646,6 @@ class Survival_Map(MultiAgentEnv):
                 if observation[i][j].entity_type == 0:
                     loc.append((i, j))
 
-        #loc = np.where(type(observation[:,:]) == Empty)
         coordinates = []
 
         for i_local, j_local in loc:
@@ -607,7 +675,8 @@ class Survival_Map(MultiAgentEnv):
     def _get_impossible_coordinates(self):
         # If they want in to go into the water, update their next coordinates
         for agent in self.agents:
-            if (agent.new_i, agent.new_j) in self.grid.water_coordinates:
+            if (agent.new_i, agent.new_j) in self.grid.water_coordinates or \
+                (agent.new_i, agent.new_j) in self.grid.tree_coordinates:
                 agent.update_new_location(agent.i, agent.j)
 
         new_coordinates = [(agent.new_i, agent.new_j) for agent in self.agents]
@@ -618,19 +687,38 @@ class Survival_Map(MultiAgentEnv):
         else:
             return []
 
-    def _get_adjacent_agent(self, agent1: Agent) -> Agent:
+    def _get_adjacent_agent(self, agent1: Agent, radius = 2) -> Agent:
         agents = [(agent.i, agent.j, agent) for agent in self.agents]
 
         for i in range(len(agents)):
             x, y, agent2 = agents[i]
-            if agent1 != agent2 and abs(x - agent1.i) <= 2 and abs(y - agent1.j) <= 2:
+            if agent1 != agent2 and abs(x - agent1.i) <= radius and abs(y - agent1.j) <= radius:
                 return agent2
+            
+    def _get_eaten_agents(self, agent1: Agent, radius: int = 1) -> List[Agent]:
+        agents = [(agent.i, agent.j, agent) for agent in self.agents]
+        eaten_agents = []
+
+        for i in range(len(agents)):
+            x, y, agent2 = agents[i]
+            if agent1 != agent2 and type(agent2) == Agent and abs(x - agent1.i) <= radius and abs(y - agent1.j) <= radius:
+                eaten_agents.append(agent2)
+        
+        return eaten_agents
 
     def _get_gene(self, obj: Entity or Agent) -> int:
         if obj.entity_type == EntityTypes.agent and not obj.dead:
             return obj.gene
         else:
-            return 0
+            return 0.
+    
+    def _get_type(self, obj: Entity or Agent or Wolf) -> int:
+        if type(obj) == Agent and not obj.dead:
+            return 4.
+        elif type(obj) == Wolf and not obj.dead:
+            return -4.
+        else:
+            return 0.
     
     def _get_food(self, obj: Entity or Agent) -> float:
         if obj.entity_type == EntityTypes.food:
@@ -645,6 +733,12 @@ class Survival_Map(MultiAgentEnv):
     def _get_water(self, obj: Entity or Agent) -> float:
         if obj.entity_type == EntityTypes.water:
             return 2.
+        else:
+            return 0.
+    
+    def _get_tree(self, obj: Entity or Agent) -> float:
+        if obj.entity_type == EntityTypes.tree:
+            return -3.
         else:
             return 0.
 
@@ -701,11 +795,11 @@ class Survival_Map(MultiAgentEnv):
                     new_brain.agent.load_state_dict(old_brain_weights)
                     new_brain.target.load_state_dict(old_brain_weights)
 
-                    new_agent = self._add_agent(random_loc=True, brain=new_brain, gene=selected_agent.gene)
+                    new_agent = self._add_agent(random_loc=True, brain=new_brain, gene=selected_agent.gene, type=type(selected_agent))
                 else:
-                    new_agent = self._add_agent(random_loc=True, brain=RandBrain(), gene=selected_agent.gene)
+                    new_agent = self._add_agent(random_loc=True, brain=RandBrain(), gene=selected_agent.gene, type=type(selected_agent))
                 
-                new_agent.id = self.agent_key(selected_agent.gene, self.agent_count)
+                new_agent.id = self.agent_key(selected_agent.gene, self.agent_count, type=type(selected_agent))
                 self.agents.append(new_agent)
             
             # Reset metrics

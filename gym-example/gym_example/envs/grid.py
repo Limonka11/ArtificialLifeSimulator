@@ -1,7 +1,7 @@
 import numpy as np
 from typing import List, Type
 
-from .entities import Entity, EntityTypes, Water
+from .entities import Entity, EntityTypes, Water, Tree
 
 class Grid:
     def __init__(self, width: int, height: int):
@@ -10,6 +10,7 @@ class Grid:
         self.grid = np.zeros([self.height, self.width], dtype=object)
 
         self.water_coordinates = []
+        self.tree_coordinates = []
 
         for i in range(self.height):
             for j in range(self.width):
@@ -82,6 +83,8 @@ class Grid:
         i, j = indices[0][random_idx], indices[1][random_idx]
         if np.random.random() < p:
             self.grid[i, j] = entity((i, j), **kwargs)
+            if type(self.grid[i, j]) == Tree:
+                self.tree_coordinates.append((i, j))
             return self.grid[i, j]
         else:
             return None
