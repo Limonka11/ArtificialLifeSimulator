@@ -1,202 +1,229 @@
 import sys
+
 sys.path.insert(0, "C:\\imperial\\MengProject\\gym-example")
 sys.path.insert(0, "C:\\imperial\\MengProject\\gym-example\\gym_example")
 from gym_example.envs.Survival_Map import Survival_Map
-#from gym_example.envs.fail1 import Fail_v1
+from typing import Dict
+import matplotlib.pyplot as plt
+from gymnasium import spaces
 from ray.tune.registry import register_env
 import gymnasium as gym
 import os
 import ray
 from ray import air, tune
 from ray.rllib.algorithms import ppo
+from ray.rllib.policy.policy import PolicySpec
 from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.core.rl_module.rl_module import SingleAgentRLModuleSpec
+from ray.rllib.policy import Policy
+from ray.rllib.env import BaseEnv
+from ray.rllib.evaluation import MultiAgentEpisode, RolloutWorker, Episode
+from ray.rllib.examples.policy.random_policy import RandomPolicy
 import shutil
 from ray.rllib.models import ModelCatalog
 import numpy as np
-import time
-
-from gym_example.envs.Entities.A2CBrain import DDQNBrain
 from gym_example.envs.Entities.lstmBrain import TorchRNNModel
 
-# class SelfPlayCallback(DefaultCallbacks):
-#     def __init__(self):
-#         super().__init__()
-#         # 0=RandomPolicy, 1=1st main policy snapshot,
-#         # 2=2nd main policy snapshot, etc..
-#         self.current_opponent = 0
-#         self.last_removed_opponent = 1
-#         self.update_fn = False
+class SelfPlayCallback(DefaultCallbacks):
+    def __init__(self):
+        super().__init__()
+        # 0=RandomPolicy, 1=1st main policy snapshot,
+        # 2=2nd main policy snapshot, etc..
+        self.current_opponent = 0
+        self.last_removed_opponent = 1
+        self.update_fn = False
 
-#         self.policy_names = set()
-#         #self.policy_names.add("main")
-#         self.policy_names.add("gene_2_policy")
+        self.policy_names = set()
+        #self.policy_names.add("main")
+        #self.policy_names.add("gene_2_policy")
+        self.policy_names.add("predator_policy")
 
-#     def on_episode_end(self, worker, base_env, policies, episode, **kwargs):
-#         """
-#         Used in order to add custom metrics to our tensorboard data
-#         """
-#         # Get env refernce from rllib wraper
-#         # env = base_env.get_unwrapped()[0]
-#         #policy_ids = [p for p in policies.keys()]
+    def on_episode_start(self, worker: RolloutWorker, base_env: BaseEnv,
+                         policies: Dict[str, Policy],
+                         episode: MultiAgentEpisode, **kwargs):
+        #print("episode {} started".format(episode.episode_id))
+        episode.user_data["attack_damage"] = []
+        episode.user_data["armor"] = []
+        episode.user_data["agility"] = []
+        episode.user_data["agent_ids"] = []
+
+    def on_episode_end(self, worker, base_env, policies, episode: MultiAgentEpisode, **kwargs):
+        """
+        Used in order to add custom metrics to our tensorboard data
+        """
+        # Get env refernce from rllib wraper
+        # env = base_env.get_unwrapped()[0]
+        #policy_ids = [p for p in policies.keys()]
             
-#         # if self.update_fn:
-#         #     # inplace reset of the worker context which is shared across various parts and the environment
-#         #     # which is accessed by workers sample collector and related parts
-#         #     def reset_env(env, ctx):
-#         #         env.reset()
+        # if self.update_fn:
+        #     # inplace reset of the worker context which is shared across various parts and the environment
+        #     # which is accessed by workers sample collector and related parts
+        #     def reset_env(env, ctx):
+        #         env.reset()
 
-#         #     # Per worker policy map fn updates - note in reduced form of problem no extra code was added
-#         #     # to handle oddities with global worker for local mode
-#         #     def policy_mapping_fn(agent_id, episode, worker, **kwargs):
-#         #         #print("EPI: ", episode.episode_id % 2 == agent_id, agent_id)
-#         #         gay = np.random.randint(worker.callbacks.last_removed_opponent, self.current_opponent + 1)
-#         #         print("GAY2: ", gay, " ", list(range(worker.callbacks.last_removed_opponent, worker.callbacks.current_opponent + 1)))
-#         #         return (
-#         #             "main"
-#         #             if agent_id.startswith("gene-1")
-#         #             else "main_v{}".format(
-#         #                 gay
-#         #             )
-#         #         )
+        #     # Per worker policy map fn updates - note in reduced form of problem no extra code was added
+        #     # to handle oddities with global worker for local mode
+        #     def policy_mapping_fn(agent_id, episode, worker, **kwargs):
+        #         #print("EPI: ", episode.episode_id % 2 == agent_id, agent_id)
+        #         gay = np.random.randint(worker.callbacks.last_removed_opponent, self.current_opponent + 1)
+        #         print("GAY2: ", gay, " ", list(range(worker.callbacks.last_removed_opponent, worker.callbacks.current_opponent + 1)))
+        #         return (
+        #             "main"
+        #             if agent_id.startswith("gene-1")
+        #             else "main_v{}".format(
+        #                 gay
+        #             )
+        #         )
 
-#         #     worker.set_policy_mapping_fn(policy_mapping_fn)
-#         #     #worker.set_policies_to_train(["main"])
-#         #     worker.foreach_env_with_context(reset_env)
+        #     worker.set_policy_mapping_fn(policy_mapping_fn)
+        #     #worker.set_policies_to_train(["main"])
+        #     worker.foreach_env_with_context(reset_env)
 
-#         #     self.update_fn = False
+        #     self.update_fn = False
 
-#         main_reward = 0
-#         other_reward = 0
-#         for key, value in episode.agent_rewards.items():
-#             #print(key)
-#             if key[-1].startswith("gene_2") or key[-1].startswith("main_"):
-#                 other_reward += value
-#             elif key[-1].startswith("main"):
-#                 main_reward += value
-#             else:
-#                 raise Exception("Sorry, expected only two teams")
+        main_reward = 0
+        other_reward = 0
+        
+        # Check if this can be used to check the number of agents to add a custom metric of the populations
+        # Could we check what is the last agent
+        predator_population = 0
+        prey_1_population = 0
+        prey_2_population = 0
+        for key, value in episode.agent_rewards.items():
+            # print(key[-1])
+            if key[-1].startswith("gene_2"):
+                other_reward += value
+                prey_2_population += 1
+            elif key[-1].startswith("main"):
+                other_reward += value
+                prey_1_population += 1
+            elif key[-1].startswith("predator"):
+                main_reward += value
+                predator_population += 1
+            else:
+                raise Exception("Sorry, expected only three teams")
 
-#         episode.custom_metrics["final_reward"] = main_reward
-#         episode.custom_metrics["win"] = 1 if main_reward > other_reward else 0
-#         episode.custom_metrics["draw"] = 1 if main_reward == other_reward else 0
+        episode.custom_metrics["final_reward"] = main_reward
+        episode.custom_metrics["win"] = 1 if main_reward > other_reward else 0
+        episode.custom_metrics["draw"] = 1 if main_reward == other_reward else 0
+        episode.custom_metrics["predator_population"] = predator_population
+        episode.custom_metrics["prey_1_population"] = prey_1_population
+        episode.custom_metrics["prey_2_population"] = prey_2_population
 
-#     def on_train_result(self, *, algorithm, result, **kwargs):
-#         # Get the win rate for the train batch.
-#         # Note that normally, one should set up a proper evaluation config,
-#         # such that evaluation always happens on the already updated policy,
-#         # instead of on the already used train_batch.
-#         #TODO: This may tot be needed
-#         if "policy_main_reward" in result["hist_stats"]:
-#             #print("HERE: ", result["hist_stats"])
-#             # main_rew = result["hist_stats"].pop("policy_main_reward")
-#             # #opp_rew = result["hist_stats"].pop("policy_gene_2_policy_reward")
-#             # opponent_rew = list(result["hist_stats"].values())[0]
-#             # print("COMBINED: ",sum(opponent_rew))
-#             # assert len(main_rew) == len(opponent_rew)
-#             # won = 0
-#             # for r_main, r_opponent in zip(main_rew, opponent_rew):
-#             #     if r_main > r_opponent:
-#             #         won += 1
+    # def on_train_result(self, *, algorithm, result, **kwargs):
+    #     # Get the win rate for the train batch.
+    #     # Note that normally, one should set up a proper evaluation config,
+    #     # such that evaluation always happens on the already updated policy,
+    #     # instead of on the already used train_batch.
+    #     #TODO: This may tot be needed
+    #     if "policy_main_reward" in result["hist_stats"]:
+    #         #print("HERE: ", result["hist_stats"])
+    #         # main_rew = result["hist_stats"].pop("policy_main_reward")
+    #         # #opp_rew = result["hist_stats"].pop("policy_gene_2_policy_reward")
+    #         # opponent_rew = list(result["hist_stats"].values())[0]
+    #         # print("COMBINED: ",sum(opponent_rew))
+    #         # assert len(main_rew) == len(opponent_rew)
+    #         # won = 0
+    #         # for r_main, r_opponent in zip(main_rew, opponent_rew):
+    #         #     if r_main > r_opponent:
+    #         #         won += 1
 
-#             #print("HERE: ", result["sampler_results"]["policy_reward_min"].keys())
-#             win_rate = result["custom_metrics"]["win_mean"]
-#             result["win_rate"] = win_rate
+    #         #print("HERE: ", result["sampler_results"]["policy_reward_min"].keys())
+    #         win_rate = result["custom_metrics"]["win_mean"]
+    #         result["win_rate"] = win_rate
 
-#             print(f"Iter={algorithm.iteration} win-rate={win_rate} -> ", end="")
+    #         print(f"Iter={algorithm.iteration} win-rate={win_rate} -> ", end="")
 
-#             # If win rate is good -> Snapshot current policy and play against
-#             # it next, keeping the snapshot fixed and only improving the "main"
-#             # policy.
-#             if win_rate > 0.55: # win_rate_treshold
-#                 self.current_opponent += 1
-#                 new_pol_id = f"main_v{self.current_opponent}"
-#                 print(f"Adding new opponent to the mix ({new_pol_id}).")
-#                 self.policy_names.add(new_pol_id)
+    #         # If win rate is good -> Snapshot current policy and play against
+    #         # it next, keeping the snapshot fixed and only improving the "main"
+    #         # policy.
+    #         if win_rate > 0.55: # win_rate_treshold
+    #             self.current_opponent += 1
+    #             new_pol_id = f"main_v{self.current_opponent}"
+    #             print(f"Adding new opponent to the mix ({new_pol_id}).")
+    #             self.policy_names.add(new_pol_id)
 
-#                 print("NAMES: ", self.policy_names)
+    #             print("NAMES: ", self.policy_names)
 
-#                 # Re-define the mapping function, such that "main" is forced
-#                 # to play against any of the previously played policies
-#                 # (excluding "random").
-#                 def policy_mapping_fn(agent_id, episode, worker, **kwargs):
-#                     return (
-#                         "main"
-#                         if agent_id.startswith("gene-1")
-#                         else "main_v{}".format(
-#                             np.random.randint(self.last_removed_opponent, self.current_opponent + 1)
-#                         )
-#                     )
+    #             # Re-define the mapping function, such that "main" is forced
+    #             # to play against any of the previously played policies
+    #             # (excluding "random").
+    #             def policy_mapping_fn(agent_id, episode, worker, **kwargs):
+    #                 return (
+    #                     "main"
+    #                     if agent_id.startswith("gene-1")
+    #                     else "main_v{}".format(
+    #                         np.random.randint(self.last_removed_opponent, self.current_opponent + 1)
+    #                     )
+    #                 )
 
-#                 main_policy = algorithm.get_policy("main")
-#                 # if algorithm.config._enable_learner_api:
-#                 #     new_policy = algorithm.add_policy(
-#                 #         policy_id=new_pol_id,
-#                 #         policy_cls=type(main_policy),
-#                 #         policy_mapping_fn=policy_mapping_fn,
-#                 #         module_spec=SingleAgentRLModuleSpec.from_module(main_policy.model),
-#                 #     )
-#                 # else:
-#                 new_policy = algorithm.add_policy(
-#                     policy_id=new_pol_id,
-#                     policy_cls=type(main_policy),
-#                     policy_mapping_fn=policy_mapping_fn,
-#                     policies_to_train=["main"],
-#                 )
+    #             main_policy = algorithm.get_policy("main")
+    #             # if algorithm.config._enable_learner_api:
+    #             #     new_policy = algorithm.add_policy(
+    #             #         policy_id=new_pol_id,
+    #             #         policy_cls=type(main_policy),
+    #             #         policy_mapping_fn=policy_mapping_fn,
+    #             #         module_spec=SingleAgentRLModuleSpec.from_module(main_policy.model),
+    #             #     )
+    #             # else:
+    #             new_policy = algorithm.add_policy(
+    #                 policy_id=new_pol_id,
+    #                 policy_cls=type(main_policy),
+    #                 policy_mapping_fn=policy_mapping_fn,
+    #                 policies_to_train=["main"],
+    #             )
 
-#                 # Set the weights of the new policy to the main policy.
-#                 # We'll keep training the main policy, whereas `new_pol_id` will
-#                 # remain fixed.
-#                 main_state = main_policy.get_state()
-#                 new_policy.set_state(main_state)
+    #             # Set the weights of the new policy to the main policy.
+    #             # We'll keep training the main policy, whereas `new_pol_id` will
+    #             # remain fixed.
+    #             main_state = main_policy.get_state()
+    #             new_policy.set_state(main_state)
 
-#                 # Too many policies makes distributed learning hard
-#                 # due to communication size
-#                 # if len(self.policy_names) > 3:
+    #             # Too many policies makes distributed learning hard
+    #             # due to communication size
+    #             # if len(self.policy_names) > 3:
 
-#                 #     # Remove policy from algorithm
-#                 #     algorithm.remove_policy(policy_id="main_v{}".format(
-#                 #             self.last_removed_opponent
-#                 #         ))
+    #             #     # Remove policy from algorithm
+    #             #     algorithm.remove_policy(policy_id="main_v{}".format(
+    #             #             self.last_removed_opponent
+    #             #         ))
                     
-#                 #     # Remove policy from name list
-#                 #     self.policy_names.remove("main_v{}".format(
-#                 #             self.last_removed_opponent
-#                 #         ))
+    #             #     # Remove policy from name list
+    #             #     self.policy_names.remove("main_v{}".format(
+    #             #             self.last_removed_opponent
+    #             #         ))
                     
-#                 #     print("REMOVING: ", "main_v{}".format(self.last_removed_opponent))
-#                 #     self.last_removed_opponent += 1
+    #             #     print("REMOVING: ", "main_v{}".format(self.last_removed_opponent))
+    #             #     self.last_removed_opponent += 1
 
-#                 #     # Due to the nature of the env_runner in the rollout worker we have to update the environments at
-#                 #     # episode end of the first trajectory in the next training iteration --- limitation with how
-#                 #     # env_runner is configured though minor item
-#                 #     def update_worker_callback_flag(worker):
-#                 #         worker.callbacks.policy_names = worker.callbacks.policy_names
-#                 #         worker.callbacks.update_fn = True
-#                 #         worker.callbacks.last_removed_opponent += 1
-#                 #         worker.set_policy_mapping_fn(policy_mapping_fn)
-#                 #         print("HUH: ", worker.callbacks.last_removed_opponent)
+    #             #     # Due to the nature of the env_runner in the rollout worker we have to update the environments at
+    #             #     # episode end of the first trajectory in the next training iteration --- limitation with how
+    #             #     # env_runner is configured though minor item
+    #             #     def update_worker_callback_flag(worker):
+    #             #         worker.callbacks.policy_names = worker.callbacks.policy_names
+    #             #         worker.callbacks.update_fn = True
+    #             #         worker.callbacks.last_removed_opponent += 1
+    #             #         worker.set_policy_mapping_fn(policy_mapping_fn)
+    #             #         print("HUH: ", worker.callbacks.last_removed_opponent)
 
-#                 #     algorithm.workers.foreach_worker(update_worker_callback_flag)
+    #             #     algorithm.workers.foreach_worker(update_worker_callback_flag)
 
-#                 # We need to sync the just copied local weights (from main policy)
-#                 # to all the remote workers as well.
-#                 algorithm.workers.sync_weights()
-#             else:
-#                 print("not good enough; will keep learning ...")
+    #             # We need to sync the just copied local weights (from main policy)
+    #             # to all the remote workers as well.
+    #             algorithm.workers.sync_weights()
+    #         else:
+    #             print("not good enough; will keep learning ...")
 
-#             # +2 = main + random
-#             result["league_size"] = self.current_opponent + 2
-#         else:
-#             print("HERE:", result["hist_stats"])
+    #         # +2 = main + random
+    #         result["league_size"] = self.current_opponent + 2
+    #     else:
+    #         print("HERE:", result["hist_stats"])
 
 def policy_mapper(agent_id, episode, worker):
-    if agent_id.startswith("gene-1"):
+    if agent_id.startswith("agent-"):
         return "main"
     else:
-        return "gene_2_policy"
+        return "predator_policy"
 
 def main():
     # init directory in which to save checkpoints
@@ -229,14 +256,12 @@ def main():
         "render_env": False,
         #"clip_rewards": 0.2,
         "env_config": {
-            "size": 30,
-            "brains": [
-                    DDQNBrain(), DDQNBrain(), DDQNBrain(), DDQNBrain(), DDQNBrain(),
-                    ],
-            "max_agents": 40,
+            "size": 40,
+            "brains": 25,
+            "max_agents": 35,
             "render_mode": "rgb_array"
         },
-        "gamma": 0.99,
+        "gamma": 0.97,
         "kl_coeff": 1.0,
         "num_workers": 1,
         #change back to 20
@@ -246,8 +271,8 @@ def main():
         # These two may break stuff
         # https://github.com/ray-project/ray/issues/12709#issuecomment-741737472
         # https://chuacheowhuan.github.io/RLlib_trainer_config/
-        "horizon": -1,#2000,
-        "soft_horizon": -1,
+        "horizon": -1, # OLD 2000
+        "soft_horizon": False,
         "use_critic": True,
         "use_gae": True,
         "shuffle_sequences": True,
@@ -255,10 +280,10 @@ def main():
         "vf_clip_param": 10.0,
         "kl_target": 0.01,
         # "clip_rewards": True,
-        "clip_param": 0.25,
+        "clip_param": 0.20,
         # Number of SGD iterations in each outer loop
         # (i.e., number of epochs to execute per train batch).
-        "num_sgd_iter": 24,
+        "num_sgd_iter": 15, #24,
         # Divide episodes into fragments of this many steps each during rollouts.
         # Sample batches of this size are collected from rollout workers and
         # combined into a larger batch of `train_batch_size` for learning.
@@ -268,14 +293,14 @@ def main():
         # evenly sized batches, but increases variance as the reward-to-go will
         # need to be estimated at truncation boundaries.
         "batch_mode": "truncate_episodes",
-        "sgd_minibatch_size": 1638,
+        "sgd_minibatch_size": 4096,#15515, #11466,
         # Training batch size, if applicable. Should be >= rollout_fragment_length.
         # Samples batches will be concatenated together to a batch of this size,
         # which is then passed to SGD.
-        "train_batch_size": 3686,
-        "entropy_coeff": 0.001,
-        "lr": 5e-04,
-        "lambda": 0.76,
+        "train_batch_size": 8192, #31030, #25802,
+        "entropy_coeff": 0.001, #5e-05,
+        "lr": 5e-04, #0.0001,
+        "lambda": 0.8,
         "model": {
             "custom_model": "rnn",
             "max_seq_len": 20,
@@ -285,55 +310,34 @@ def main():
             # When you define the policy and map the agent_id to that policy, you
             # are defining the action and observation space for that agent.
             "policy_mapping_fn": policy_mapper,
-            "policies": {"main", "gene_2_policy"},
+            "policies": {"main", "predator_policy"},
+                # {"main": (RandomPolicy, spaces.Box(low=-100, high=300, shape=(59,), dtype=np.float32), spaces.Discrete(9), {}),
+                #  #"gene_2_policy": PolicySpec(action_space=spaces.Discrete(9)),
+                #  "predator_policy": (RandomPolicy, spaces.Box(low=-100, high=300, shape=(59,), dtype=np.float32), spaces.Discrete(5), {})},
             # Always just train the "main" policy.
-            "policies_to_train": ["main", "gene_2_policy"], #"gene_2_policy"],
+            "policies_to_train": ["main", "predator_policy"],
             "policy_map_cache": "/opt/project/temp_cache",
-            "policy_map_capacity": 200
+            "policy_map_capacity": 200,
+            #"count_steps_by": "agent_steps"
         },
 
-        # "callbacks": SelfPlayCallback,
+        "callbacks": SelfPlayCallback,
     }
 
-    # algo = ppo.PPO(env=select_env, config=config_dict) 
-
-    # status = "{:2d} reward {:6.2f}/{:6.2f}/{:6.2f} len {:4.2f} saved {}"
-    # n_iter = 1000
-
-    train = False
-    # if train == True:
-    #     # train a policy with RLlib using PPO
-    #     for n in range(n_iter):
-    #         # Run the episodes
-    #         result = algo.train()
-    #         # Save a checkpoint of the latest policy
-    #         chkpt_file = algo.save(chkpt_root)
-
-    #         print(status.format(
-    #                 n + 1,
-    #                 result["episode_reward_min"],
-    #                 result["episode_reward_mean"],
-    #                 result["episode_reward_max"],
-    #                 result["episode_len_mean"],
-    #                 chkpt_file
-    #                 ))
-
-
-    #     # Examine one of the trained policies
-    #     policy = algo.get_policy("main")
-    #     model = policy.model
-    #     print(model)
+    train = True
 
     if train == True:
-        stopping_criteria = {"training_iteration": 200, "episode_reward_mean": 16000, "episode_len_mean": 3000}
+        # "episode_len_mean": 3000
+        stopping_criteria = {"training_iteration": 1000, "episode_len_mean": 4000}
 
         analysis = tune.run(
             "PPO",
             config=config_dict,
             stop=stopping_criteria,
-            checkpoint_freq=5,
+            checkpoint_freq=15,
             checkpoint_at_end=True,
             checkpoint_score_attr="episode_reward_mean",
+            local_dir="survival_env_reselts",
         )
 
         # restore a trainer from the last checkpoint
@@ -346,17 +350,23 @@ def main():
 
     else:
         def policy_mapper_test(agent_id, episode, worker):
-            if agent_id.startswith("gene-1"):
+            if agent_id.startswith("agent-"):
                 return "main"
             else:
-                return "main"
+                return "predator_policy"
         
         config_dict["multiagent"]["policy_mapping_fn"] = policy_mapper_test
         config_dict["callbacks"] = DefaultCallbacks
 
     config_dict["explore"] = False
     trainer = PPOTrainer(config=config_dict)
-    trainer.restore("C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_b76a4_00000_0_2023-05-16_10-12-01\\checkpoint_000133")#"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_045a9_00000_0_2023-05-01_15-46-55\\checkpoint_000115")#"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_1b8aa_00000_0_2023-05-01_08-45-14\\checkpoint_000100")#"C:\Users\alexa\ray_results\PPO\PPO_survival-map-v0_0d507_00000_0_2023-04-30_09-36-07\checkpoint_000122")
+    trainer.restore(checkpoint)
+    # C:\imperial\MengProject\survival_env_reselts\PPO\PPO_survival-map-v0_cfef1_00000_0_2023-05-21_09-30-59\checkpoint_001000 
+    #"C:\\imperial\\MengProject\\survival_env_reselts\\PPO\\PPO_survival-map-v0_21cd7_00000_0_2023-05-19_15-47-52\\checkpoint_000910" pedator-prey
+    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_b76a4_00000_0_2023-05-16_10-12-01\\checkpoint_000133")
+    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_045a9_00000_0_2023-05-01_15-46-55\\checkpoint_000115")
+    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_1b8aa_00000_0_2023-05-01_08-45-14\\checkpoint_000100")
+    #"C:\Users\alexa\ray_results\PPO\PPO_survival-map-v0_0d507_00000_0_2023-04-30_09-36-07\checkpoint_000122")
 
     # if train == False:
     #     config_dict["explore"] = False
@@ -399,6 +409,7 @@ def main():
             state_dict[agent_id] = state_dict[agent_id] if agent_id in state_dict else [
             np.zeros([lstm_cell_size], np.float32) for _ in range(2)
         ]
+            #print(agent_id, " ", policy_mapper(agent_id, 1, 1))
             action[agent_id], state_dict[agent_id], _ = trainer.compute_single_action(agent_obs, state=state_dict[agent_id], policy_id=policy_mapper(agent_id, 1, 1))
 
         #time.sleep(0.2)
@@ -417,6 +428,6 @@ def main():
 
 
 if __name__ == "__main__":
-    #print(gym.envs.registry.keys())
     main()
     print("DONE")
+    plt.show()

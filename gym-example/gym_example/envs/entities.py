@@ -2,6 +2,8 @@ from typing import Collection
 from enum import IntEnum
 import pygame
 import sys
+import numpy as np
+import math
 
 sys.path.append("C:\\imperial\\MengProject\\Entities")
 
@@ -92,7 +94,10 @@ class Agent(Entity):
     def __init__(self,
                 position: Collection[int],
                 brain: Brain = None,
-                gene: int = None):
+                gene: int = None,
+                attack_damage: int = 200,
+                armor: int = 0,
+                agility = 0.05):
         super().__init__(position, EntityTypes.agent)
 
         self.id = ""
@@ -111,6 +116,7 @@ class Agent(Entity):
         self.max_thirst = 100
         self.max_hunger = 100
         self.birth_delay = 10
+        self.libido = 0
         
         # test feature
         self.has_eaten = 0
@@ -118,7 +124,12 @@ class Agent(Entity):
         self.has_reproduced = 0
         self.miss_reproduced = False
         self.miss_attacked = False
-        self.inter_killed = False
+        self.inter_attacked = False
+
+        # Evolutionary features
+        self.attack_damage = attack_damage
+        self.armor = armor
+        self.agility = agility
 
         self.state = None
         self.state_prime = None
@@ -132,14 +143,25 @@ class Agent(Entity):
         self.i = self.new_i
         self.j = self.new_j
 
-    # TODO: Change dynamics
-    def execute_attack(self):
+    def execute_attack(self, agent_armor, agent_health, dodged):
         self.health = min(200, self.health + 100)
-        self.killed = 1
+
+        if agent_armor + agent_health <= self.attack_damage and not dodged:
+            self.killed = 1
+            return True
+        
+        return False
 
     # Decreas health if agent is attacked
-    def is_attacked(self):
-        self.health = 0
+    def is_attacked(self, agent_attack_damage):
+        damage_dealt = agent_attack_damage - self.armor
+
+        dodged = True if np.random.random() < self.agility else False
+
+        if damage_dealt > 0 and not dodged:
+            self.health = max(0, self.health - damage_dealt)
+
+        return dodged
 
     # Update the new location
     def update_new_location(self, i: int, j: int):
@@ -152,6 +174,7 @@ class Agent(Entity):
         self.done = done
 
     # Currently not used!
+    # This was used when Neuroevolution was tested
     def learn(self, n_epi, **kwargs):
         if self.age > 1:
             self.brain.learn(age=self.age,
@@ -164,16 +187,32 @@ class Agent(Entity):
                             n_epi=n_epi)
 
     def can_breed(self) -> bool:
-        if not self.dead and self.age > 5 and self.hunger > 30 and self.birth_delay == 0:
+        self.libido = self.get_agent_libido()
+        if (not self.dead) and self.age > 40 and self.hunger > 30 and self.birth_delay == 0 and self.libido > 5.:
             return True
         return False
+    
+    def get_agent_libido(self):
+        libido = 0
+        real_age = self.age // 4
+
+        if real_age >= 25 and real_age < 100:
+            libido = 10 * math.exp((-(real_age - 20) / 40)) + 2 * math.exp((-(real_age - 20) / 20)) 
+        elif real_age >= 0 and real_age < 25:
+            libido = (real_age ** 2) / 60
+
+        libido /= (self.birth_delay + 1)
+        return libido
     
 class Wolf(Agent):
     def __init__(self,
             position: Collection[int],
             brain: Brain = None,
-            gene: int = None):
-        super().__init__(position, brain, gene)
+            gene: int = None,
+            attack_damage = 200,
+            armor = 0,
+            agility = 0.05):
+        super().__init__(position, brain, gene, attack_damage, armor, agility)
 
         self.hunger = 200
         self.thirst = 200

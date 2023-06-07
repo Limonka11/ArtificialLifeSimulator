@@ -14,7 +14,7 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
                  num_outputs,
                  model_config,
                  name,
-                 fc_size=64,
+                 fc_size=28,
                  lstm_state_size=32):
         nn.Module.__init__(self)
         super().__init__(obs_space, action_space, num_outputs, model_config,
@@ -24,10 +24,11 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
         self.fc_size = fc_size
         self.lstm_state_size = lstm_state_size
 
-        # Build the Module from fc + LSTM + 2xfc (action + value outs).
         self.fc1 = nn.Linear(self.obs_size, self.fc_size)
+        self.fc2 = nn.Linear(self.fc_size, (self.fc_size)//2)
+        self.fc3 = nn.Linear(9, 4)
         self.lstm = nn.LSTM(
-            self.fc_size, self.lstm_state_size, batch_first=True)
+            18, self.lstm_state_size, batch_first=True)
         self.action_branch = nn.Linear(self.lstm_state_size, num_outputs)
         self.value_branch = nn.Linear(self.lstm_state_size, 1)
         # Holds the current "base" output (before logits layer).
@@ -56,7 +57,16 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
             NN Outputs (B x T x ...) as sequence.
             The state batches as a List of two items (c- and h-states).
         """
+        #print("HMM", inputs.size())
+        x, y = torch.split(inputs, [50, 9], dim=2)
         x = nn.functional.relu(self.fc1(inputs))
+        x = nn.functional.relu(self.fc2(x))
+
+        y = nn.functional.relu(self.fc3(y))
+
+        #print("HM: ", x.size() , "hm: ", y.size())
+        x = torch.cat((x, y), dim=2)
+        #print("HM: ", x.size())
         self._features, [h, c] = self.lstm(
             x, [torch.unsqueeze(state[0], 0),
                 torch.unsqueeze(state[1], 0)])
