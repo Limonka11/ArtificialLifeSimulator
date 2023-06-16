@@ -144,7 +144,7 @@ class Agent(Entity):
         self.j = self.new_j
 
     def execute_attack(self, agent_armor, agent_health, dodged):
-        self.health = min(200, self.health + 100)
+        self.health = min(200, self.health + 20)
 
         if agent_armor + agent_health <= self.attack_damage and not dodged:
             self.killed = 1

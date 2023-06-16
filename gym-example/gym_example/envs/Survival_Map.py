@@ -28,6 +28,10 @@ class Survival_Map(MultiAgentEnv):
         self.agents = []
         self.num_brains = config.get("brains", 5)
         self.max_agents = config.get("max_agents", 20)
+        self.prey_pred_ratio = config.get("prey_pred_ratio", 4)
+        self.food_prob = config.get("food_prob", 0.1)
+        self.poison_prob = config.get("poison_prob", 0.05)
+        self.tree_prob = config.get("tree_prob", 0.02)
 
         # State of each agent
         self.state = {}
@@ -78,9 +82,9 @@ class Survival_Map(MultiAgentEnv):
         self._init_water()
         
         # Reset Consumables
-        self._init_consumables(Food, probability = 0.05)
-        self._init_consumables(Poison, probability = 0.05)
-        self._init_trees(Tree, probability=0.02)
+        self._init_consumables(Food, probability = self.food_prob)
+        self._init_consumables(Poison, probability = self.poison_prob)
+        self._init_trees(Tree, probability = self.tree_prob)
 
         # Reset agents
         self.agents = []
@@ -91,7 +95,7 @@ class Survival_Map(MultiAgentEnv):
             self.show_stats(self.episode_num // 10)
 
         # Genetical algorithm
-        if len(self.mutation_stats_bunnies) != 0 and len(self.mutation_stats_wolfs) != 0:
+        if len(self.mutation_stats_bunnies) != 0:# and len(self.mutation_stats_wolfs) != 0:
             # Metrics
             avg_attack_bun = np.average([agent[0] for agent in self.mutation_stats_bunnies])
             avg_armor_bun = np.average([agent[1] for agent in self.mutation_stats_bunnies])
@@ -100,8 +104,6 @@ class Survival_Map(MultiAgentEnv):
             avg_attack_wolf = np.average([agent[0] for agent in self.mutation_stats_wolfs])
             avg_armor_wolf = np.average([agent[1] for agent in self.mutation_stats_wolfs])
             avg_agility_wolf = np.average([agent[2] for agent in self.mutation_stats_wolfs])
-
-            #print(avg_attack_bun, avg_armor_bun, avg_agility_bun, avg_attack_wolf, avg_armor_wolf, avg_agility_wolf)
 
             self.gens[0].append(avg_attack_bun)
             self.gens[1].append(avg_armor_bun)
@@ -117,23 +119,19 @@ class Survival_Map(MultiAgentEnv):
 
             total_age_wolfs= sum([stats[3] for stats in self.mutation_stats_wolfs])
             select_probs_wolfs = [wolf[3] / total_age_wolfs for wolf in self.mutation_stats_wolfs]
-            #print("PROBS: ", select_probs_wolfs, "WOLFS: ", self.mutation_stats_wolfs)
-            #print("PROBS: ", select_probs_bunnies, "BUNN: ", self.mutation_stats_bunnies)
 
         for idx in range(self.num_brains):
 
-            if len(self.mutation_stats_bunnies) != 0 and len(self.mutation_stats_wolfs) != 0:
-                if(self.agent_count+1) % 4 == 0:
-                    #print("WOLF")
+            if len(self.mutation_stats_bunnies) != 0:# and len(self.mutation_stats_wolfs) != 0:
+                if(self.agent_count+1) % self.prey_pred_ratio == 0:
                     # Use a weighted random choice to select an agent, with higher chances for agents with higher scores
                     selected_wolf_idx = np.random.choice(len(self.mutation_stats_wolfs), p=select_probs_wolfs)
                     selected_stats = self.mutation_stats_wolfs[selected_wolf_idx]
                 else:
-                    #print("BUNN")
                     selected_bunny_idx = np.random.choice(len(self.mutation_stats_bunnies), p=select_probs_bunnies)
                     selected_stats = self.mutation_stats_bunnies[selected_bunny_idx]
 
-                #Mutate attack damage
+                # Mutate attack damage
                 if np.random.random() < 0.02: # mutation_rate
                     #noise = selected_stats[0] * 0.01 # mutation_std = 0.01
                     if np.random.random() <= 0.5:
@@ -151,15 +149,16 @@ class Survival_Map(MultiAgentEnv):
 
                 # Mutate agility
                 if np.random.random() < 0.02: # mutation_rate
-                    noise = selected_stats[2] * 0.05 # mutation_std = 0.01
+                    #noise = selected_stats[2] * 0.05 # mutation_std = 0.01
+                    mutation = np.random.normal(loc=0, scale=0.01, size=1)
                     if np.random.random() <= 0.5:
-                        selected_stats[2] += noise
+                        selected_stats[2] += mutation[0]
                     else:
-                        selected_stats[2] -= noise
+                        selected_stats[2] -= mutation[0]
                 
                 cur_agent = self._add_agent(random_loc=True,
                                             gene=(self.agent_count+1) % 2 + 10,
-                                            type=Agent if (self.agent_count+1) % 4 != 0 else Wolf,
+                                            type=Agent if (self.agent_count+1) % self.prey_pred_ratio != 0 else Wolf,
                                             attack_damage=selected_stats[0],
                                             armor=selected_stats[1],
                                             agility=selected_stats[2])
@@ -169,7 +168,7 @@ class Survival_Map(MultiAgentEnv):
                 # Create a new agent and add in the agent list
                 cur_agent = self._add_agent(random_loc=True,
                                             gene=(self.agent_count+1) % 2 + 10,
-                                            type=Agent if (self.agent_count+1) % 4 != 0 else Wolf)
+                                            type=Agent if (self.agent_count+1) % self.prey_pred_ratio != 0 else Wolf)
                 
             cur_agent.id = self.agent_key(cur_agent.gene, self.agent_count, type(cur_agent))
             #print("KEY: ", cur_agent.id)
@@ -269,9 +268,7 @@ class Survival_Map(MultiAgentEnv):
                         
                         # Need to add the next location
                         new_agent.update_new_location(self.agents[idx].i, self.agents[idx].j)
-                        #print("ADDED: ", new_agent.id)
                         self.agents.append(new_agent)
-                        #print("DUCK:", [agent.id for agent in self.agents])
                     else:
                         self.agents[idx].miss_reproduced = True
                     
@@ -281,7 +278,6 @@ class Survival_Map(MultiAgentEnv):
 
                 # Attack up
                 if self.agents[idx].action == Actions.attack_up:
-                    #print("ATTACK_UP")
                     if self.agents[idx].i == 0:
                         target = self.grid.get_cell(self.size - 1, self.agents[idx].j)
                     else:
@@ -289,7 +285,6 @@ class Survival_Map(MultiAgentEnv):
 
                 # Attack right
                 elif self.agents[idx].action == Actions.attack_right:
-                    #print("ATTACK_RIGHT")
                     if self.agents[idx].j == (self.size - 1):
                         target = self.grid.get_cell(self.agents[idx].i, 0)
                     else:
@@ -297,7 +292,6 @@ class Survival_Map(MultiAgentEnv):
 
                 # Attack down
                 elif self.agents[idx].action == Actions.attack_down:
-                    #print("ATTACK_DOWN")
                     if self.agents[idx].i == (self.size - 1):
                         target = self.grid.get_cell(0, self.agents[idx].j)
                     else:
@@ -305,7 +299,6 @@ class Survival_Map(MultiAgentEnv):
 
                 # Attack left
                 elif self.agents[idx].action == Actions.attack_left:
-                    #print("ATTACK_LEFT")
                     if self.agents[idx].j == 0:
                         target = self.grid.get_cell(self.agents[idx].i, self.size - 1)
                     else:
@@ -362,7 +355,6 @@ class Survival_Map(MultiAgentEnv):
         truncates = {}
         infos = {}
 
-        #print("After: ", [agent.id for agent in self.agents])
         for idx, agent in enumerate(self.agents):
             self.state[agent.id] = self._get_agent_obs(idx)
             rewards[agent.id], dones[agent.id], truncates[agent.id], infos[agent.id] = self._get_rewards(idx)
@@ -376,8 +368,6 @@ class Survival_Map(MultiAgentEnv):
 
         self._update_agent_state()
 
-        #if dones["__all__"] == True:
-        #print("AFTER2: ", dones)
         return self.state, rewards, dones, truncates, infos
     
     def render(self):
@@ -400,11 +390,8 @@ class Survival_Map(MultiAgentEnv):
     def _get_rewards(self, idx):
         done = False
 
-        nr_kin_alive = max(0, sum([1 for other_agent in self.agents if not other_agent.dead and
-                                   self.agents[idx].gene == other_agent.gene]) - 1)
         alive_agents = sum([1 for other_agent in self.agents if not other_agent.dead])
         if self.agents[idx].dead:
-            print("HERE")
             reward = -10
             done = True
         else:
@@ -417,9 +404,6 @@ class Survival_Map(MultiAgentEnv):
                     elif (self.agents[idx].hunger / self.agents[idx].max_hunger) >= 0.0: reward = 2 * self.agents[idx].has_eaten
                 else:
                     reward = -0.1
-                # reward = (self.agents[idx].health / self.agents[idx].max_health) + \
-                #         (self.agents[idx].hunger / self.agents[idx].max_hunger)
-                        #(self.agents[idx].thirst / self.agents[idx].max_thirst)
 
                 if self.agents[idx].has_drunk:
                     if (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.75: reward += 0
@@ -439,38 +423,21 @@ class Survival_Map(MultiAgentEnv):
                 else:
                     reward = -0.1
 
-                # TODO: Increase the rewards for drinking
                 if self.agents[idx].has_drunk:
-                    #print("WATER NICE")
                     if (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.75: reward += 0
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.50: reward += 0.8
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.25: reward += 1
                     elif (self.agents[idx].thirst / self.agents[idx].max_thirst) >= 0.0: reward += 2
                 elif self.agents[idx].thirst == 0:
-                    #print("NEED TO DRINK")
                     reward -= 0.5
-
-                        #(self.agents[idx].thirst / self.agents[idx].max_thirst)
-                #reward = (agent.health / agent.max_health) + (agent.hunger / agent.max_hunger) + (agent.thirst / agent.max_thirst)
-                #reward = agent.has_eaten
 
             if self.agents[idx].inter_attacked:
                 reward -= 0.5
             elif self.agents[idx].killed:
                 reward += 4
 
-            # if self.agents[idx].miss_reproduced:
-            #     reward -= 1
-            
             if self.agents[idx].has_reproduced:
                 reward += (2*self.agents[idx].has_reproduced)
-
-            # if self.agents[idx].miss_attacked:
-            #     reward -= 1
-        # if type(self.agents[idx]) == Wolf:
-        #     print("WOLF: ", reward, self.agents[idx].health)
-
-        #print("HMMMM: ", reward)
 
         return reward, done, False, {}
 
@@ -559,11 +526,10 @@ class Survival_Map(MultiAgentEnv):
         if random_loc:
             return self.grid.set_random(type, p=p, gene=gene, attack_damage=attack_damage, armor=armor, agility=agility)
         else:
-            return self.grid.set_cell(coordinates[0], coordinates[1], type, gene=gene, attack_damage=attack_damage, armor=armor, agility=agility)
-        
+            return self.grid.set_cell(coordinates[0], coordinates[1], type, gene=gene, attack_damage=attack_damage, armor=armor, agility=agility) 
 
     def _add_food(self):
-        if len(np.where(self.grid.get_grid() == EntityTypes.food)[0]) <= ((self.size * self.size) // 15):
+        if len(np.where(self.grid.get_grid() == EntityTypes.food)[0]) <= ((self.size * self.size) // 10):
             for _ in range(3):
                 self.grid.set_random(Food, p=0.2)
 
@@ -855,8 +821,6 @@ class Survival_Map(MultiAgentEnv):
             return -3.
         else:
             return 0.
-
-
 
     def show_stats(self, number):
         gens = range(len(self.gens[0]))

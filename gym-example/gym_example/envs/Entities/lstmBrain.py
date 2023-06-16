@@ -24,11 +24,17 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
         self.fc_size = fc_size
         self.lstm_state_size = lstm_state_size
 
+        self.conv1 = nn.Conv2d(1, 3, kernel_size=3)
+        self.conv2 = nn.Conv2d(3, 6, kernel_size=2)
+
+        self.conv4 = nn.Conv1d(1, 3, kernel_size=3)
+        self.conv5 = nn.Conv1d(3, 6, kernel_size=3, stride=2)
+
         self.fc1 = nn.Linear(self.obs_size, self.fc_size)
-        self.fc2 = nn.Linear(self.fc_size, (self.fc_size)//2)
-        self.fc3 = nn.Linear(9, 4)
+        # self.fc2 = nn.Linear(self.fc_size, (self.fc_size)//2)
+        # self.fc3 = nn.Linear(10, 5)
         self.lstm = nn.LSTM(
-            18, self.lstm_state_size, batch_first=True)
+            12, self.lstm_state_size, batch_first=True)
         self.action_branch = nn.Linear(self.lstm_state_size, num_outputs)
         self.value_branch = nn.Linear(self.lstm_state_size, 1)
         # Holds the current "base" output (before logits layer).
@@ -47,6 +53,33 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
         assert self._features is not None, "must call forward() first"
         return torch.reshape(self.value_branch(self._features), [-1])
 
+    # @override(RecurrentNetwork)
+    # def forward_rnn(self, inputs, state, seq_lens):
+    #     """Feeds `inputs` (B x T x ..) through the Gru Unit.
+    #     Returns the resulting outputs as a sequence (B x T x ...).
+    #     Values are stored in self._cur_value in simple (B) shape (where B
+    #     contains both the B and T dims!).
+    #     Returns:
+    #         NN Outputs (B x T x ...) as sequence.
+    #         The state batches as a List of two items (c- and h-states).
+    #     """
+    #     #print("HMM", inputs.size())
+    #     x, y = torch.split(inputs, [49, 10], dim=2)
+    #     x = nn.functional.relu(self.fc1(inputs))
+    #     x = nn.functional.relu(self.fc2(x))
+
+    #     y = nn.functional.relu(self.fc3(y))
+
+    #     #print("HM: ", x.size() , "hm: ", y.size())
+    #     x = torch.cat((x, y), dim=2)
+    #     print("WTF:", x.shape)
+    #     #print("HM: ", x.size())
+    #     self._features, [h, c] = self.lstm(
+    #         x, [torch.unsqueeze(state[0], 0),
+    #             torch.unsqueeze(state[1], 0)])
+    #     action_out = self.action_branch(self._features)
+    #     return action_out, [torch.squeeze(h, 0), torch.squeeze(c, 0)]
+
     @override(RecurrentNetwork)
     def forward_rnn(self, inputs, state, seq_lens):
         """Feeds `inputs` (B x T x ..) through the Gru Unit.
@@ -57,12 +90,24 @@ class TorchRNNModel(RecurrentNetwork, nn.Module):
             NN Outputs (B x T x ...) as sequence.
             The state batches as a List of two items (c- and h-states).
         """
-        #print("HMM", inputs.size())
-        x, y = torch.split(inputs, [50, 9], dim=2)
-        x = nn.functional.relu(self.fc1(inputs))
-        x = nn.functional.relu(self.fc2(x))
+        x, y = torch.split(inputs, [49, 10], dim=2)
+        x = x[:, :, None,  :]
+        x = torch.reshape(x, (-1, 1, 7, 7))
 
-        y = nn.functional.relu(self.fc3(y))
+        x = nn.functional.relu(self.conv1(x))
+        x = nn.functional.max_pool2d(x, 2)
+        x = nn.functional.relu(self.conv2(x))
+
+        x = torch.permute(x, (0, 2, 3, 1))
+        x = torch.reshape(x, (-1, inputs.size(dim=1), 6))
+
+        y = torch.reshape(y, (-1, 1, 10))
+        y = nn.functional.relu(self.conv4(y))
+        y = nn.functional.max_pool1d(y, 2)
+        y = nn.functional.relu(self.conv5(y))
+
+        y = torch.permute(y, (0, 2, 1))
+        y = torch.reshape(y, (-1, inputs.size(dim=1), 6))
 
         #print("HM: ", x.size() , "hm: ", y.size())
         x = torch.cat((x, y), dim=2)

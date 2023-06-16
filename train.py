@@ -23,6 +23,104 @@ import shutil
 from ray.rllib.models import ModelCatalog
 import numpy as np
 from gym_example.envs.Entities.lstmBrain import TorchRNNModel
+from prettytable import PrettyTable
+
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--run", type=str, default="PPO", help="The RLlib-registered algorithm to use."
+)
+parser.add_argument("--num-cpus", type=int, default=0)
+parser.add_argument(
+    "--env-size",
+    type=int,
+    default=40,
+    help="The size of the environment i.e. Size X Size.",
+)
+
+parser.add_argument(
+    "--agent-count", type=int, default=20, help="The number of agents to be spawn in the beginning of each episode."
+)
+
+parser.add_argument(
+    "--max-agent-count", type=int, default=35, help="The max number of agents that could exist at the same time."
+)
+
+parser.add_argument(
+    "--prey-pred-ratio",
+    type=int,
+    default=2147483647,
+    help="The ratio which will be used for adding the different types of agents. For example, if \
+    the --agent-count is 10 and --prey-pred-ratio is 2, then 5 rabbits and 5 wolves will be spawned."
+)
+
+parser.add_argument(
+    "--food-prob",
+    type=float,
+    default=0.1,
+    help="The probability to spawn a food entity in each empty grid cell at the beginning of each episode."
+)
+
+parser.add_argument(
+    "--poison-prob",
+    type=float,
+    default=0.05,
+    help="The probability to spawn a poison entity in each empty grid cell at the beginning of each episode."
+)
+
+parser.add_argument(
+    "--tree-prob",
+    type=float,
+    default=0.02,
+    help="The probability to spawn a tree entity in each empty grid cell at the beginning of each episode."
+)
+
+parser.add_argument(
+    "--test-model",
+    type=str,
+    default="",
+    help="Whether this script should be run as a test or for training purposes.",
+)
+parser.add_argument(
+    "--stop-iters", type=int, default=1000, help="Number of iterations to train."
+)
+
+parser.add_argument(
+    "--stop-reward", type=float, default=4000, help="Reward at which we stop training."
+)
+
+parser.add_argument(
+    "--checkpoint-freq", type=int, default=15, help="The number of training steps after which a checkpoint of the model is taken."
+)
+
+parser.add_argument(
+    "--num-workers", type=int, default=1, help="The number of workers to spawn. Each worker will be running environments on it."
+)
+
+parser.add_argument(
+    "--num-envs-per-worker",
+    type=int,
+    default=1,
+    help="Number of environments to evaluate vector-wise per worker. This enables model inference batching, which can improve \
+        performance for inference bottlenecked workloads."
+)
+
+parser.add_argument(
+    "--num-gpus", type=int, default=0, help="The number of GPUs to use."
+)
+
+def count_parameters(model):
+        table = PrettyTable(["Modules", "Parameters"])
+        total_params = 0
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad: continue
+            params = parameter.numel()
+            table.add_row([name, params])
+            total_params+=params
+        print(table)
+        print(f"Total Trainable Params: {total_params}")
+        return total_params
 
 class SelfPlayCallback(DefaultCallbacks):
     def __init__(self):
@@ -226,6 +324,9 @@ def policy_mapper(agent_id, episode, worker):
         return "predator_policy"
 
 def main():
+
+    args = parser.parse_args()
+
     # init directory in which to save checkpoints
     chkpt_root = "tmp/exa"
     shutil.rmtree(chkpt_root, ignore_errors=True, onerror=None)
@@ -254,23 +355,22 @@ def main():
     config_dict = {
         "env": select_env,
         "render_env": False,
-        #"clip_rewards": 0.2,
         "env_config": {
-            "size": 40,
-            "brains": 25,
-            "max_agents": 35,
+            "size": args.env_size,
+            "brains": args.agent_count,
+            "max_agents": args.max_agent_count,
+            "prey_pred_ratio": args.prey_pred_ratio,
+            "food_prob": args.food_prob,
+            "poison_prob": args.poison_prob,
+            "tree_prob": args.tree_prob,
             "render_mode": "rgb_array"
         },
         "gamma": 0.97,
         "kl_coeff": 1.0,
-        "num_workers": 1,
-        #change back to 20
-        #"num_envs_per_worker": 1,
+        "num_workers": args.num_workers,
+        "num_envs_per_worker": args.num_envs_per_worker,
         # Use GPUs iff `RLLIB_NUM_GPUS` env var set to > 0.
-        "num_gpus": int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-        # These two may break stuff
-        # https://github.com/ray-project/ray/issues/12709#issuecomment-741737472
-        # https://chuacheowhuan.github.io/RLlib_trainer_config/
+        "num_gpus": int(os.environ.get("RLLIB_NUM_GPUS", args.num_gpus)),
         "horizon": -1, # OLD 2000
         "soft_horizon": False,
         "use_critic": True,
@@ -279,7 +379,6 @@ def main():
         "vf_loss_coeff": 1.0,
         "vf_clip_param": 10.0,
         "kl_target": 0.01,
-        # "clip_rewards": True,
         "clip_param": 0.20,
         # Number of SGD iterations in each outer loop
         # (i.e., number of epochs to execute per train batch).
@@ -324,17 +423,17 @@ def main():
         "callbacks": SelfPlayCallback,
     }
 
-    train = True
+    train = True if args.test_model == "" else False
 
     if train == True:
-        # "episode_len_mean": 3000
-        stopping_criteria = {"training_iteration": 1000, "episode_len_mean": 4000}
+        stopping_criteria = {"training_iteration": args.stop_iters,
+                             "episode_reward_mean": args.stop_reward}
 
         analysis = tune.run(
             "PPO",
             config=config_dict,
             stop=stopping_criteria,
-            checkpoint_freq=15,
+            checkpoint_freq=args.checkpoint_freq,
             checkpoint_at_end=True,
             checkpoint_score_attr="episode_reward_mean",
             local_dir="survival_env_reselts",
@@ -360,13 +459,13 @@ def main():
 
     config_dict["explore"] = False
     trainer = PPOTrainer(config=config_dict)
-    trainer.restore(checkpoint)
-    # C:\imperial\MengProject\survival_env_reselts\PPO\PPO_survival-map-v0_cfef1_00000_0_2023-05-21_09-30-59\checkpoint_001000 
-    #"C:\\imperial\\MengProject\\survival_env_reselts\\PPO\\PPO_survival-map-v0_21cd7_00000_0_2023-05-19_15-47-52\\checkpoint_000910" pedator-prey
-    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_b76a4_00000_0_2023-05-16_10-12-01\\checkpoint_000133")
-    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_045a9_00000_0_2023-05-01_15-46-55\\checkpoint_000115")
-    #"C:\\Users\\alexa\\ray_results\\PPO\\PPO_survival-map-v0_1b8aa_00000_0_2023-05-01_08-45-14\\checkpoint_000100")
-    #"C:\Users\alexa\ray_results\PPO\PPO_survival-map-v0_0d507_00000_0_2023-04-30_09-36-07\checkpoint_000122")
+    if args.test_model == "":
+        trainer.restore(checkpoint)
+    else:
+        args.test_model = args.test_model.replace("\\", "\\\\")
+        trainer.restore(args.test_model)
+    
+    #count_parameters(trainer.get_policy("main").model)  
 
     # if train == False:
     #     config_dict["explore"] = False
@@ -409,10 +508,8 @@ def main():
             state_dict[agent_id] = state_dict[agent_id] if agent_id in state_dict else [
             np.zeros([lstm_cell_size], np.float32) for _ in range(2)
         ]
-            #print(agent_id, " ", policy_mapper(agent_id, 1, 1))
             action[agent_id], state_dict[agent_id], _ = trainer.compute_single_action(agent_obs, state=state_dict[agent_id], policy_id=policy_mapper(agent_id, 1, 1))
 
-        #time.sleep(0.2)
         obs, reward, done, truncated, info = env.step(action)
         sum_reward += sum(reward.values())
 
