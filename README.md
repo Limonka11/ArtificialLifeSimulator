@@ -29,3 +29,12 @@ you need to specify the file containing the model that you are trying to test:
 To tune a model, simply run the tune.py. There are again many values
 to configure. To see more about the configurable values you can run:
 ```python .\tune.py -h```
+
+#### Video Examples
+- Video of wolves performing collaborative hunting!
+  
+[![Video of wolves performing collaborative hunting](http://i3.ytimg.com/vi/Lsw4edRWRMw/hqdefault.jpg)](https://www.youtube.com/watch?v=Lsw4edRWRMw)
+
+- Video of wolves waiting for agents to drink near the lake and fighting amongst themselves!
+  
+[![Video of wolves performing collaborative hunting](http://i3.ytimg.com/vi/Lsw4edRWRMw/hqdefault.jpg)](https://www.youtube.com/shorts/FAXsG4GofEQ)
